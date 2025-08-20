@@ -1,20 +1,17 @@
-// Origata v0.12
-//
-// three.js + extras (pinned versions for stability)
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/controls/OrbitControls.js';
-import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/postprocessing/UnrealBloomPass.js';
-// lightweight UI
-import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.20.0/dist/lil-gui.esm.js';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import GUI from 'lil-gui';
 
 // ---------- renderer / scene / camera ----------
 const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.outputColorSpace = THREE.SRGBColorSpace; // default, explicit for clarity
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -26,11 +23,13 @@ camera.position.set(0, 1.8, 5.2);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-// ---------- postprocessing (bloom) ----------
+// ---------- postprocessing (bloom + output) ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.9, 0.55, 0.2);
 composer.addPass(bloom);
+// ensure correct color conversion / tone mapping at the end
+composer.addPass(new OutputPass());
 
 // ---------- geometry: foldable pleated sheet ----------
 const WIDTH = 4.0, HEIGHT = 2.4, STRIPES = 64, SEG_Y = 120;
@@ -154,8 +153,7 @@ function onResize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
-  composer.setSize(w, h);
-  bloom.setSize(w, h);
+  composer.setSize(w, h); // pass sizes propagate to all passes
 }
 window.addEventListener('resize', onResize);
 
