@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Origata 0.12</title>
+    <meta name="theme-color" content="#050509" />
+    <style>
+      html, body { height: 100%; margin: 0; background: #050509; }
+      #app { position: fixed; inset: 0; }
+      /* Heads-up display */
+      .hud {
+        position: fixed; left: 12px; bottom: 12px; z-index: 10;
+        display: flex; gap: 8px; flex-wrap: wrap;
+      }
+      .hud button {
+        padding: 8px 12px;
+        font: 12px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #11131a; color: #e7f2ff; border: 1px solid #2a3244; border-radius: 6px;
+        cursor: pointer;
+      }
+      .hud button:hover { background: #151a22; }
+      .brand {
+        position: fixed; left: 12px; top: 10px; color: #a6b1c2;
+        font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        user-select: none; opacity: 0.9;
+      }
+      @media (max-width: 560px) {
+        .brand { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="brand">Origata — click & drag to orbit</div>
+    <div class="hud">
+      <button id="btnSnap" title="Download a PNG of the current frame">Save PNG</button>
+    </div>
+
+    <!-- Your app code -->
+    <script type="module" src="./main.js"></script>
+    <noscript>This page needs JavaScript enabled.</noscript>
+  </body>
+</html>
