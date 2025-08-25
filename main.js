@@ -1,16 +1,14 @@
 /**
- * Origami — Paper-Like Folds + Crane
- * - Rigid-hinge folds with sequential propagation (later creases move with the paper).
- * - Adds convex MASKS per crease to simulate regional folds (needed for crane-like steps).
- * - Two Crane options:
- *   (A) "Crane (Demo)" — kinematic approximation with masks so it folds step-by-step.
- *   (B) "Crane (MIT FOLD)" — loads a solver-accurate crane (.fold) exported from
- *       origamisimulator.org (Examples → Crane (3D)/(flat) → File → Save Simulation as FOLD).  [MIT app supports FOLD export of folded states.] 
- * - Shader/look preserved (iridescence + fibers + FXAA + ACES); bloom default lowered.
+ * Psychedelic Origami — Paper-like Folds + Crane + Shader Animation
  *
- * Notes / references:
- * • MIT Origami Simulator folds all creases simultaneously via a GPU solver and exports FOLD/OBJ. :contentReference[oaicite:1]{index=1}
- * • FOLD format spec + viewer (vertices/edges/faces, assignments, fold angles). :contentReference[oaicite:2]{index=2}
+ * ✅ Rigid hinges (piecewise rigid) with sequential propagation (later creases move with paper)
+ * ✅ Crane (Demo) sequence with regional masks
+ * ✅ Crane (MIT FOLD import): file picker, drag-and-drop, and ./crane.fold fetch (GitHub Pages friendly)
+ * ✅ Shader animation sliders: base, amplitude, speed for Hue/Iridescence/Film nm/EdgeGlow/Sectors
+ * ✅ Lower default bloom; PNG download
+ *
+ * FOLD requirements match Origami Simulator conventions: vertices/edges/assignments/faces; foldAngle degrees
+ * with valley positive (+) and mountain negative (–). (Loader handles either folded meshes or CPs.) 
  */
 
 import * as THREE from 'three';
@@ -22,6 +20,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import GUI from 'lil-gui';
+import earcut from 'earcut';
 
 // ---------- Renderer / Scene ----------
 const app = document.getElementById('app');
@@ -30,7 +29,7 @@ renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.08;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -44,135 +43,117 @@ controls.enableDamping = true;
 // ---------- Post ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-// Lower default bloom strength
+// lowered default bloom for subtlety
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.6, 0.2);
 composer.addPass(bloom);
 const fxaa = new ShaderPass(FXAAShader);
-fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.innerHeight);
+fxaa.material.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
 composer.addPass(fxaa);
 composer.addPass(new OutputPass());
 
-// ---------- Paper geometry ----------
-const SIZE = 3.0;                  // square paper for crane
-const SEG = 180;                   // dense → crisp hinges
-const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
-geo.rotateX(-0.25);                // tilt
+// ---------- Paper geometry (square sheet for crane) ----------
+const SIZE = 3.0;
+const SEG = 180;
+const sheetGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+sheetGeo.rotateX(-0.25);
 
 // ---------- Math helpers ----------
-const tmp = {
-  v: new THREE.Vector3(),
-  u: new THREE.Vector3(),
-};
-function signedDistance2(p /*Vec3*/, a /*Vec3*/, d /*unit Vec3*/) {
-  const px = p.x - a.x, py = p.y - a.y;
-  return d.x * py - d.y * px; // z component of 2D cross
-}
-function rotatePointAroundLine(p, a, axisUnit, ang) {
-  tmp.v.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a);
-  p.copy(tmp.v);
-}
-function rotateVectorAxis(v, axisUnit, ang) { v.applyAxisAngle(axisUnit, ang); }
+const tmp = { v: new THREE.Vector3(), u: new THREE.Vector3() };
+function sdLine2(p, a, d){ const px=p.x-a.x, py=p.y-a.y; return d.x*py - d.y*px; }
+function rotPointAroundAxis(p, a, axisUnit, ang){ tmp.v.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a); p.copy(tmp.v); }
+function rotVecAxis(v, axisUnit, ang){ v.applyAxisAngle(axisUnit, ang); }
 function clamp01(x){ return Math.max(0, Math.min(1, x)); }
-const Easings = {
+const Ease = {
   linear: t => t,
   smoothstep: t => t*t*(3-2*t),
   easeInOutCubic: t => (t<0.5? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2)
 };
 
-// ---------- Creases + MASKS ----------
-const MAX_CREASES = 24;
+// ---------- Creases + Masks (ordered sequence) ----------
+const MAX_CREASES = 32;
 const MAX_MASKS_PER = 4;
+const VALLEY = +1, MOUNTAIN = -1;
 
 const base = {
   count: 0,
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
-  amp:  new Array(MAX_CREASES).fill(0),      // |angle| in radians
-  sign: new Array(MAX_CREASES).fill(1),      // +1=valley, -1=mountain
-  // convex mask: up to 4 half-planes (point, dir) — region folds like "petal"
+  amp:  new Array(MAX_CREASES).fill(0),   // |angle| in radians
+  sign: new Array(MAX_CREASES).fill(1),   // +1 valley, -1 mountain
+  phase:new Array(MAX_CREASES).fill(0),   // per-crease anim phase
   mCount: new Array(MAX_CREASES).fill(0),
-  mA:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
-  mD:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0))),
-  phase:new Array(MAX_CREASES).fill(0)       // per-crease anim phase
+  mA: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
+  mD: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0)))
 };
+
 function resetBase(){
-  base.count = 0;
+  base.count=0;
   for (let i=0;i<MAX_CREASES;i++){
     base.A[i].set(0,0,0); base.D[i].set(1,0,0);
     base.amp[i]=0; base.sign[i]=1; base.phase[i]=0; base.mCount[i]=0;
     for (let m=0;m<MAX_MASKS_PER;m++){ base.mA[i][m].set(0,0,0); base.mD[i][m].set(1,0,0); }
   }
 }
-function addCrease({ Ax=0, Ay=0, Dx=1, Dy=0, deg=180, sign=+1, masks=[] }){
+
+function addCrease({ Ax=0, Ay=0, Dx=1, Dy=0, deg=180, sign=VALLEY, masks=[] }){
   if (base.count >= MAX_CREASES) return;
   const i = base.count++;
   const d = new THREE.Vector2(Dx, Dy).normalize();
   base.A[i].set(Ax, Ay, 0);
   base.D[i].set(d.x, d.y, 0);
   base.amp[i]  = THREE.MathUtils.degToRad(Math.max(0, Math.min(180, Math.abs(deg))));
-  base.sign[i] = sign >= 0 ? +1 : -1;
+  base.sign[i] = sign >= 0 ? VALLEY : MOUNTAIN;
   base.phase[i]= Math.random()*Math.PI*2;
   base.mCount[i] = Math.min(MAX_MASKS_PER, masks.length);
   for (let m=0;m<base.mCount[i];m++){
-    const mk = masks[m];
-    const dd = new THREE.Vector2(mk.Dx, mk.Dy).normalize();
+    const mk = masks[m]; const dd = new THREE.Vector2(mk.Dx, mk.Dy).normalize();
     base.mA[i][m].set(mk.Ax, mk.Ay, 0);
     base.mD[i][m].set(dd.x, dd.y, 0);
   }
 }
 
-// ---------- Effective axes + masks (sequential propagation) ----------
+// ---------- Effective frames (sequential propagation, crisp hinges) ----------
 const eff = {
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
   ang: new Float32Array(MAX_CREASES),
   mCount: new Int32Array(MAX_CREASES),
-  mA:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
-  mD:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0))),
+  mA: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
+  mD: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0)))
 };
 
-const drive = { animate:false, speed:0.9, progress:0.7, easing:'smoothstep', currentStep:0, stepCount:1 };
+const drive = { play:false, speed:0.9, progress:0.7, easing:'smoothstep', step:0, steps:1 };
 
-// angles per crease, respecting step boundaries
 function computeAngles(tSec){
-  const E = Easings[drive.easing] || Easings.linear;
+  const E = Ease[drive.easing] || Ease.linear;
   for (let i=0;i<base.count;i++){
-    // piecewise step easing: only fold up to current step; earlier steps stay at 1
-    let localT = 0;
-    if (i < drive.currentStep) localT = 1;
-    else if (i === drive.currentStep) localT = drive.animate ? (0.5 + 0.5*Math.sin(tSec*drive.speed + base.phase[i])) : drive.progress;
-    else localT = 0;
-    localT = E(clamp01(localT));
-    eff.ang[i] = base.sign[i] * base.amp[i] * localT;
+    let t = 0;
+    if (i < drive.step) t = 1;
+    else if (i === drive.step) t = drive.play ? (0.5 + 0.5*Math.sin(tSec*drive.speed + base.phase[i])) : drive.progress;
+    else t = 0;
+    eff.ang[i] = base.sign[i] * base.amp[i] * E(clamp01(t));
     eff.mCount[i] = base.mCount[i];
   }
+  for (let i=base.count;i<MAX_CREASES;i++){ eff.ang[i]=0; eff.mCount[i]=0; }
 }
 
-// propagate axes and mask lines by earlier folds (crisp hinge: only + side moves)
-function computeEffectiveFrames(){
-  // base copy
+function computeFrames(){
   for (let i=0;i<base.count;i++){
     eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize();
-    for (let m=0;m<MAX_MASKS_PER;m++){
-      eff.mA[i][m].copy(base.mA[i][m]);
-      eff.mD[i][m].copy(base.mD[i][m]).normalize();
-    }
+    for (let m=0;m<MAX_MASKS_PER;m++){ eff.mA[i][m].copy(base.mA[i][m]); eff.mD[i][m].copy(base.mD[i][m]).normalize(); }
   }
-  // sequentially rotate future creases & their masks
   for (let j=0;j<base.count;j++){
-    const Aj = eff.A[j]; const Dj = eff.D[j].clone().normalize();
-    const ang = eff.ang[j]; if (Math.abs(ang) < 1e-7) continue;
+    const Aj = eff.A[j]; const Dj = eff.D[j].clone().normalize(); const ang = eff.ang[j]; if (Math.abs(ang)<1e-7) continue;
     for (let k=j+1;k<base.count;k++){
-      const sd = signedDistance2(eff.A[k], Aj, Dj);
+      const sd = sdLine2(eff.A[k], Aj, Dj);
       if (sd > 0.0){
-        rotatePointAroundLine(eff.A[k], Aj, Dj, ang);
-        rotateVectorAxis(eff.D[k], Dj, ang); eff.D[k].normalize();
-        // masks move with paper on the rotated side
+        rotPointAroundAxis(eff.A[k], Aj, Dj, ang);
+        rotVecAxis(eff.D[k], Dj, ang); eff.D[k].normalize();
         for (let m=0;m<MAX_MASKS_PER;m++){
-          const sdM = signedDistance2(eff.mA[k][m], Aj, Dj);
+          const sdM = sdLine2(eff.mA[k][m], Aj, Dj);
           if (sdM > 0.0){
-            rotatePointAroundLine(eff.mA[k][m], Aj, Dj, ang);
-            rotateVectorAxis(eff.mD[k][m], Dj, ang); eff.mD[k][m].normalize();
+            rotPointAroundAxis(eff.mA[k][m], Aj, Dj, ang);
+            rotVecAxis(eff.mD[k][m], Dj, ang); eff.mD[k][m].normalize();
           }
         }
       }
@@ -180,7 +161,7 @@ function computeEffectiveFrames(){
   }
 }
 
-// ---------- Uniforms ----------
+// ---------- Uniforms (folding + shader look) ----------
 const uniforms = {
   uTime:       { value: 0 },
   uSectors:    { value: 10.0 },
@@ -197,37 +178,33 @@ const uniforms = {
   uDeff:  { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3(1,0,0)) },
   uAng:   { value: new Float32Array(MAX_CREASES) },
 
-  // masks
+  // masks (flattened)
   uMaskA: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3()) },
   uMaskD: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3(1,0,0)) },
   uMaskOn:{ value: new Float32Array(MAX_CREASES*MAX_MASKS_PER) }
 };
 
-function pushEffToUniforms(){
+function pushToUniforms(){
   uniforms.uCreaseCount.value = base.count;
   uniforms.uAeff.value = eff.A.map(v => v.clone());
   uniforms.uDeff.value = eff.D.map(v => v.clone());
   uniforms.uAng.value  = Float32Array.from(eff.ang);
 
-  const flatA = []; const flatD = []; const on = [];
+  const flatA = [], flatD = [], on = [];
   for (let i=0;i<base.count;i++){
     for (let m=0;m<MAX_MASKS_PER;m++){
-      flatA.push(eff.mA[i][m].clone());
-      flatD.push(eff.mD[i][m].clone());
+      flatA.push(eff.mA[i][m].clone()); flatD.push(eff.mD[i][m].clone());
       on.push(m < eff.mCount[i] ? 1 : 0);
     }
   }
-  // pad remainder
-  const remain = MAX_CREASES*MAX_MASKS_PER - flatA.length;
-  for (let r=0;r<remain;r++){ flatA.push(new THREE.Vector3()); flatD.push(new THREE.Vector3(1,0,0)); on.push(0); }
+  const pad = MAX_CREASES*MAX_MASKS_PER - flatA.length;
+  for (let p=0;p<pad;p++){ flatA.push(new THREE.Vector3()); flatD.push(new THREE.Vector3(1,0,0)); on.push(0); }
   uniforms.uMaskA.value = flatA;
   uniforms.uMaskD.value = flatD;
   uniforms.uMaskOn.value = Float32Array.from(on);
-
-  mat.uniformsNeedUpdate = true;
 }
 
-// ---------- Shaders ----------
+// ---------- Shaders (vertex = rigid hinges + masks; fragment = psychedelic paper) ----------
 const vs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
   #define MAX_MASKS_PER ${MAX_MASKS_PER}
@@ -244,27 +221,18 @@ const vs = /* glsl */`
 
   varying vec3 vPos; varying vec3 vN; varying vec3 vLocal; varying vec2 vUv;
 
-  vec3 rotateAroundLine(vec3 p, vec3 a, vec3 u, float ang){
+  vec3 rotAroundLine(vec3 p, vec3 a, vec3 u, float ang){
     vec3 v = p - a; float c = cos(ang), s = sin(ang);
     return a + v*c + cross(u, v)*s + u*dot(u, v)*(1.0 - c);
   }
-  vec3 rotateVector(vec3 v, vec3 u, float ang){
-    float c = cos(ang), s = sin(ang);
-    return v*c + cross(u, v)*s + u*dot(u, v)*(1.0 - c);
-  }
-  float signedDistanceToLine(vec2 p, vec2 a, vec2 d){
-    return d.x*(p.y - a.y) - d.y*(p.x - a.x);
-  }
+  vec3 rotVec(vec3 v, vec3 u, float ang){ float c=cos(ang), s=sin(ang); return v*c + cross(u, v)*s + u*dot(u,v)*(1.0-c); }
+  float sdLine(vec2 p, vec2 a, vec2 d){ return d.x*(p.y - a.y) - d.y*(p.x - a.x); }
   bool inMask(int i, vec2 p){
-    // each crease uses MAX_MASKS_PER entries, active if uMaskOn[idx] > 0.5
     for (int m=0; m<MAX_MASKS_PER; m++){
       int idx = i*MAX_MASKS_PER + m;
-      if (uMaskOn[idx] > 0.5) {
-        vec2 a = uMaskA[idx].xy;
-        vec2 d = normalize(uMaskD[idx].xy);
-        // inside means on positive side of every half-plane
-        float sd = d.x*(p.y - a.y) - d.y*(p.x - a.x);
-        if (sd <= 0.0) return false;
+      if (uMaskOn[idx] > 0.5){
+        vec2 a = uMaskA[idx].xy, d = normalize(uMaskD[idx].xy);
+        if (sdLine(p, a, d) <= 0.0) return false;
       }
     }
     return true;
@@ -277,15 +245,13 @@ const vs = /* glsl */`
 
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
-
       vec3 a = uAeff[i];
       vec3 d = normalize(uDeff[i]);
 
-      // crisp hinge on positive side, AND inside mask (if any)
-      float sd = signedDistanceToLine(p.xy, a.xy, d.xy);
+      float sd = sdLine(p.xy, a.xy, d.xy);
       if (sd > 0.0 && inMask(i, p.xy)){
-        p = rotateAroundLine(p, a, d, uAng[i]);
-        n = normalize(rotateVector(n, d, uAng[i]));
+        p = rotAroundLine(p, a, d, uAng[i]);
+        n = normalize(rotVec(n, d, uAng[i]));
       }
     }
 
@@ -300,12 +266,15 @@ const vs = /* glsl */`
 const fs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
   precision highp float;
+
   uniform float uTime;
   uniform float uSectors, uHueShift;
   uniform float uIridescence, uFilmIOR, uFilmNm, uFiber, uEdgeGlow;
+
   uniform int   uCreaseCount;
   uniform vec3  uAeff[MAX_CREASES];
   uniform vec3  uDeff[MAX_CREASES];
+
   varying vec3 vPos; varying vec3 vN; varying vec3 vLocal; varying vec2 vUv;
 
   #define PI 3.14159265359
@@ -331,12 +300,10 @@ const fs = /* glsl */`
     vec3 phase  = 4.0 * PI * ior * nm * cosTheta / lambda;
     return 0.5 + 0.5*cos(phase);
   }
-  float signedDistanceToLine(vec2 p, vec2 a, vec2 d){
-    return d.x*(p.y - a.y) - d.y*(p.x - a.x);
-  }
+  float sdLine(vec2 p, vec2 a, vec2 d){ return d.x*(p.y - a.y) - d.y*(p.x - a.x); }
 
   void main(){
-    // psychedelic kaleidoscope, unchanged look
+    // Kaleidoscopic mapping
     float theta = atan(vPos.z, vPos.x);
     float r = length(vPos.xz) * 0.55;
     float seg = 2.0*PI / max(3.0, uSectors);
@@ -349,7 +316,7 @@ const fs = /* glsl */`
     float hue = fract(n + 0.15*sin(uTime*0.3) + uHueShift);
     vec3 baseCol = hsv2rgb(vec3(hue, 0.9, smoothstep(0.25, 1.0, n)));
 
-    // paper fiber + grain
+    // fibers + grain
     float fiberLines = 0.0;
     {
       float warp = fbm(vLocal.xy*4.0 + vec2(0.2*uTime, -0.1*uTime));
@@ -366,7 +333,7 @@ const fs = /* glsl */`
       if (i >= uCreaseCount) break;
       vec2 a2 = uAeff[i].xy;
       vec2 d2 = normalize(uDeff[i].xy);
-      float sd = abs(signedDistanceToLine(vLocal.xy, a2, d2));
+      float sd = abs(sdLine(vLocal.xy, a2, d2));
       minD = min(minD, sd);
     }
     float aa = fwidth(minD);
@@ -387,20 +354,21 @@ const fs = /* glsl */`
   }
 `;
 
+// ---------- Material + Mesh ----------
 const mat = new THREE.ShaderMaterial({
   vertexShader: vs, fragmentShader: fs, uniforms,
   side: THREE.DoubleSide, extensions: { derivatives: true }
 });
-const sheet = new THREE.Mesh(geo, mat);
+const sheet = new THREE.Mesh(sheetGeo, mat);
 scene.add(sheet);
 
-// Background dome
+// background dome
 scene.add(new THREE.Mesh(
   new THREE.SphereGeometry(50, 32, 32),
   new THREE.MeshBasicMaterial({ color: 0x070711, side: THREE.BackSide })
 ));
 
-// ---------- GUI (optional look tweaks) ----------
+// ---------- GUI (optional look) ----------
 const gui = new GUI();
 const looks = gui.addFolder('Look');
 looks.add(uniforms.uSectors, 'value', 3, 24, 1).name('kaleidoSectors');
@@ -410,13 +378,11 @@ looks.add(uniforms.uFilmIOR, 'value', 1.0, 2.333, 0.001).name('filmIOR');
 looks.add(uniforms.uFilmNm, 'value', 100, 800, 1).name('filmThickness(nm)');
 looks.add(uniforms.uFiber, 'value', 0, 1, 0.001).name('paperFiber');
 looks.add(uniforms.uEdgeGlow, 'value', 0.0, 2.0, 0.01).name('edgeGlow');
-looks.add(bloom, 'strength', 0.0, 2.5, 0.01).name('bloomStrength');  // starts at 0.35
+looks.add(bloom, 'strength', 0.0, 2.5, 0.01).name('bloomStrength');
 looks.add(bloom, 'radius', 0.0, 1.5, 0.01).name('bloomRadius');
-looks.open();
+looks.close();
 
-// ---------- Presets (simple, paper-like) ----------
-const VALLEY = +1, MOUNTAIN = -1;
-
+// ---------- Presets ----------
 function preset_half_vertical_valley(){
   resetBase();
   addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
@@ -449,211 +415,233 @@ function preset_single_vertical_mountain(){
   addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:180, sign:MOUNTAIN });
 }
 
-// ---------- Crane (Demo) — sequential masked folds ----------
-// This is a compact, crane-like demo that uses convex masks to localize folds (petals/reverse).
-// It’s *not* a perfect historical sequence but kinematically behaves like paper and reads as a crane.
+// Crane (Demo): sequential masked folds (visual, paper-like)
 function preset_crane_demo(){
   resetBase();
   const s = SIZE/2;
 
-  // Step 0: diagonal valley (pre-crease / collapse bias)
-  addCrease({ Ax:0, Ay:0, Dx:1, Dy:1, deg:180, sign:VALLEY });
-
-  // Step 1: opposite diagonal valley
+  // Pre-creases: two diagonals
+  addCrease({ Ax:0, Ay:0, Dx:1, Dy:1,  deg:180, sign:VALLEY });
   addCrease({ Ax:0, Ay:0, Dx:1, Dy:-1, deg:180, sign:VALLEY });
 
-  // Step 2: central vertical valley — masked top half (start neck/tail split)
+  // Vertical split (masked top / bottom for neck/tail)
   addCrease({
     Ax:0, Ay:0, Dx:0, Dy:1, deg:150, sign:VALLEY,
-    masks:[ // diamond-ish mask: top region
-      { Ax:0, Ay:0.00, Dx:0, Dy:1 },   // above y=0
-      { Ax:-0.0001, Ay:-0.0001, Dx: 1, Dy: 1 },  // right of diag
-      { Ax: 0.0001, Ay:-0.0001, Dx:-1, Dy: 1 },  // left of anti-diag
+    masks:[
+      { Ax:0, Ay:0.00, Dx:0, Dy:1 },
+      { Ax:-0.0001, Ay:-0.0001, Dx: 1, Dy: 1 },
+      { Ax: 0.0001, Ay:-0.0001, Dx:-1, Dy: 1 }
     ]
   });
-
-  // Step 3: central vertical mountain — masked bottom half
   addCrease({
     Ax:0, Ay:0, Dx:0, Dy:1, deg:150, sign:MOUNTAIN,
     masks:[
-      { Ax:0, Ay:0.00, Dx:0, Dy:-1 },  // below y=0
+      { Ax:0, Ay:0.00, Dx:0, Dy:-1 },
       { Ax:-0.0001, Ay: 0.0001, Dx: 1, Dy:-1 },
-      { Ax: 0.0001, Ay: 0.0001, Dx:-1, Dy:-1 },
+      { Ax: 0.0001, Ay: 0.0001, Dx:-1, Dy:-1 }
     ]
   });
 
-  // Step 4: wing right — diagonal valley masked right triangle
+  // Wings
   addCrease({
     Ax:0, Ay:0, Dx:1, Dy:-1, deg:120, sign:VALLEY,
-    masks:[
-      { Ax:0, Ay:0, Dx:0, Dy:1 },     // y>0
-      { Ax:0, Ay:0, Dx:1, Dy:0 },     // x>0
-    ]
+    masks:[ { Ax:0, Ay:0, Dx:0, Dy:1 }, { Ax:0, Ay:0, Dx:1, Dy:0 } ]
   });
-
-  // Step 5: wing left — diagonal valley masked left triangle
   addCrease({
     Ax:0, Ay:0, Dx:1, Dy:1, deg:120, sign:VALLEY,
-    masks:[
-      { Ax:0, Ay:0, Dx:0, Dy:1 },     // y>0
-      { Ax:0, Ay:0, Dx:-1, Dy:0 },    // x<0
-    ]
+    masks:[ { Ax:0, Ay:0, Dx:0, Dy:1 }, { Ax:0, Ay:0, Dx:-1, Dy:0 } ]
   });
 
-  // Step 6: tail inside-reverse (approx) — steep diagonal with small mask
+  // Tail / Neck approximations
   addCrease({
     Ax:0.0, Ay:-0.3*s, Dx:1, Dy:-0.15, deg:140, sign:VALLEY,
-    masks:[
-      { Ax:0, Ay:-0.1, Dx:0, Dy:-1 }, // below slightly negative y
-      { Ax: 0.0, Ay:0.0, Dx:1, Dy:0 }, // x>0
-    ]
+    masks:[ { Ax:0, Ay:-0.1, Dx:0, Dy:-1 }, { Ax: 0.0, Ay:0.0, Dx:1, Dy:0 } ]
   });
-
-  // Step 7: neck inside-reverse (approx) — mirror of tail
   addCrease({
     Ax:0.0, Ay:-0.3*s, Dx:-1, Dy:-0.15, deg:140, sign:VALLEY,
-    masks:[
-      { Ax:0, Ay:-0.1, Dx:0, Dy:-1 }, // below slightly negative y
-      { Ax: 0.0, Ay:0.0, Dx:-1, Dy:0 }, // x<0
-    ]
+    masks:[ { Ax:0, Ay:-0.1, Dx:0, Dy:-1 }, { Ax: 0.0, Ay:0.0, Dx:-1, Dy:0 } ]
   });
 
-  // Step 8: head — small mountain
+  // Head tweak
   addCrease({
     Ax:-0.45*s, Ay:-0.65*s, Dx:1, Dy:-0.2, deg:90, sign:MOUNTAIN,
-    masks:[
-      { Ax:-0.1, Ay:-0.2, Dx:-1, Dy:-1 },
-      { Ax:-0.2, Ay:-0.2, Dx:-1, Dy: 0 },
-    ]
+    masks:[ { Ax:-0.1, Ay:-0.2, Dx:-1, Dy:-1 }, { Ax:-0.2, Ay:-0.2, Dx:-1, Dy:0 } ]
   });
 
-  drive.currentStep = 0;
-  drive.stepCount = base.count;
+  drive.step = 0; drive.steps = base.count;
 }
 
-// ---------- Crane (MIT FOLD) loader ----------
-// If ./crane.fold (JSON/FOLD) exists in the repo, this will load and show it as a separate mesh
-// shaded with the same fragment shader (no folding engine; it is already folded by the solver).
+// ---------- FOLD (MIT) import ----------
 let craneMesh = null;
-async function tryLoadCraneFOLD(){
+
+async function fetchCraneFoldInline(){
+  // Try to fetch ./crane.fold relative to the page (works on GitHub Pages if file is committed)
   try{
-    const res = await fetch('./crane.fold');
-    if (!res.ok) throw new Error('no crane.fold found');
-    const fold = await res.json();
-
-    // minimal FOLD: vertices_coords (2D or 3D), faces_vertices
-    const verts = fold.vertices_coords || fold.vertices_coords3d || [];
-    const faces = fold.faces_vertices || [];
-    if (!verts.length || !faces.length) throw new Error('invalid FOLD');
-
-    // build geometry
-    const g = new THREE.BufferGeometry();
-    // triangulate simple polygons naively (fan) for demo; MIT exports are triangulated often. :contentReference[oaicite:3]{index=3}
-    const pos = [];
-    for (const f of faces){
-      if (f.length < 3) continue;
-      for (let i=1;i+1<f.length;i++){
-        const tri = [f[0], f[i], f[i+1]];
-        for (const vi of tri){
-          const v = verts[vi];
-          const x = v[0], y = v[1], z = (v.length>2? v[2]: 0);
-          pos.push(x, y, z);
-        }
-      }
-    }
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.computeVertexNormals();
-
-    const mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({
-      vertexShader: vs, fragmentShader: fs, uniforms, side: THREE.DoubleSide
-    }));
-
-    if (craneMesh) scene.remove(craneMesh);
-    craneMesh = mesh;
-    craneMesh.position.set(0, 0, 0.001); // avoid z-fight
-    scene.add(craneMesh);
-    sheet.visible = false; // hide folding sheet; we’re viewing solver result
-    return true;
-  }catch(e){
-    if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
-    sheet.visible = true;
-    return false;
-  }
+    const res = await fetch('./crane.fold', { cache: 'no-store' });
+    if (!res.ok) throw new Error('No crane.fold at site root');
+    return await res.json();
+  }catch(e){ return null; }
 }
 
-// ---------- DOM controls ----------
-const presetSel = document.getElementById('preset');
-const btnApply  = document.getElementById('btnApply');
-const btnAnim   = document.getElementById('btnAnim');
-const btnReset  = document.getElementById('btnReset');
-const btnPrev   = document.getElementById('btnStepPrev');
-const btnNext   = document.getElementById('btnStepNext');
-const btnSnap   = document.getElementById('btnSnap');
-const progress  = document.getElementById('progress');
-const speed     = document.getElementById('speed');
-const easingSel = document.getElementById('easing');
-const stepInfo  = document.getElementById('stepInfo');
+function parseFOLDFromText(text){
+  try{ return JSON.parse(text); }catch(e){ return null; }
+}
 
-btnApply.onclick = async () => {
-  const v = presetSel.value;
+function triangulateFace3D(faceIndices, verts){
+  // Project polygon to 2D using a simple local basis for earcut
+  if (faceIndices.length < 3) return [];
+  const i0 = faceIndices[0];
+  const p0 = new THREE.Vector3().fromArray(verts[i0]);
+  const p1 = new THREE.Vector3().fromArray(verts[faceIndices[1]]);
+  const p2 = new THREE.Vector3().fromArray(verts[faceIndices[2]]);
+  const e1 = p1.clone().sub(p0).normalize();
+  const e2 = p2.clone().sub(p0);
+  e2.addScaledVector(e1, -e2.dot(e1)).normalize(); // Gram-Schmidt
+  const flat = [];
+  for (const idx of faceIndices){
+    const p = new THREE.Vector3().fromArray(verts[idx]);
+    const v = p.clone().sub(p0);
+    flat.push(v.dot(e1), v.dot(e2));
+  }
+  const ears = earcut(flat);
+  const tris = [];
+  for (let t=0;t<ears.length;t+=3){
+    const a = faceIndices[ears[t]];
+    const b = faceIndices[ears[t+1]];
+    const c = faceIndices[ears[t+2]];
+    tris.push([a,b,c]);
+  }
+  return tris;
+}
 
-  if (v === 'crane-fold'){
-    const ok = await tryLoadCraneFOLD();
-    if (!ok){
-      alert(
-`Place a solver-exported FOLD file at:
-  ./crane.fold
+function buildMeshFromFOLD(fold){
+  const verts = (fold.vertices_coords3d || fold.vertices_coords || []).map(v => [v[0], v[1], v[2] || 0]);
+  const faces = fold.faces_vertices || [];
+  if (!verts.length || !faces.length) throw new Error('FOLD missing faces/vertices');
 
-Get one from origamisimulator.org:
-  Examples → Crane (3D) or Crane (flat)
-  File → Save Simulation as… → FOLD
-(Then refresh.)`
-      );
+  const pos = [];
+  for (const f of faces){
+    if (f.length === 3){
+      for (const i of f){ const v = verts[i]; pos.push(v[0], v[1], v[2]); }
+    } else if (f.length > 3){
+      const tris = triangulateFace3D(f, verts);
+      for (const tri of tris){ for (const i of tri){ const v=verts[i]; pos.push(v[0], v[1], v[2]); } }
     }
-    drive.animate = false; btnAnim.textContent = 'Play';
+  }
+  if (pos.length < 9) throw new Error('No triangles after triangulation.');
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({
+    vertexShader: vs, fragmentShader: fs, uniforms, side: THREE.DoubleSide
+  }));
+  return mesh;
+}
+
+async function handleFOLDObject(obj){
+  // If it's a folded mesh (faces+verts present): display it directly
+  const hasFaces = Array.isArray(obj.faces_vertices) && obj.faces_vertices.length>0;
+  const hasVerts = Array.isArray(obj.vertices_coords) && obj.vertices_coords.length>0;
+  if (hasFaces && hasVerts){
+    try{
+      const mesh = buildMeshFromFOLD(obj);
+      if (craneMesh) scene.remove(craneMesh);
+      craneMesh = mesh; craneMesh.position.set(0,0,0.002); // nudge to avoid z-fight
+      scene.add(craneMesh);
+      sheet.visible = false;
+      setFoldStatus('Loaded FOLD (faces+verts). Showing folded mesh.', false);
+      return;
+    }catch(e){
+      setFoldStatus('FOLD faces could not be triangulated.', true);
+    }
+  }
+
+  // Otherwise, treat as crease pattern (CP) and preview kinematically
+  const Vc = obj.vertices_coords, Ev = obj.edges_vertices, Ea = obj.edges_assignment, Ef = obj.edges_foldAngle;
+  if (!Vc || !Ev || !Ea){
+    setFoldStatus('FOLD missing CP fields (vertices_coords, edges_vertices, edges_assignment).', true);
     return;
   }
 
-  // otherwise we’re using our folding sheet
+  resetBase();
+  // Fit CP to our sheet (square SIZE×SIZE)
+  let minX=+Infinity,minY=+Infinity,maxX=-Infinity,maxY=-Infinity;
+  for (const v of Vc){ const x=v[0], y=v[1]; if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
+  const w=maxX-minX||1, h=maxY-minY||1; const s = Math.min(SIZE/w, SIZE/h); const cx=(minX+maxX)/2, cy=(minY+maxY)/2;
+
+  const N = Math.min(Ev.length, MAX_CREASES);
+  for (let i=0;i<N;i++){
+    const assign = (Ea[i]||'').toUpperCase();
+    if (assign!=='M' && assign!=='V') continue;
+    const [ia,ib] = Ev[i] || [];
+    const A = Vc[ia], B = Vc[ib]; if (!A || !B) continue;
+    const Ax=(A[0]-cx)*s, Ay=(A[1]-cy)*s; const Dx=B[0]-A[0], Dy=B[1]-A[1];
+    let deg = 120;
+    let sign = assign==='M' ? MOUNTAIN : VALLEY;
+    if (Ef && typeof Ef[i]==='number'){ deg = Math.min(180, Math.abs(Ef[i])); sign = (Ef[i]>=0)? VALLEY : MOUNTAIN; }
+    addCrease({ Ax, Ay, Dx, Dy, deg, sign });
+  }
   sheet.visible = true;
   if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
+  setFoldStatus('Loaded FOLD crease pattern (kinematic preview).', false);
+}
 
-  if (v === 'half-vertical-valley') preset_half_vertical_valley();
-  else if (v === 'half-horizontal-valley') preset_half_horizontal_valley();
-  else if (v === 'diagonal-valley') preset_diagonal_valley();
-  else if (v === 'gate-valley') preset_gate_valley();
-  else if (v === 'accordion-5') preset_accordion_5();
-  else if (v === 'single-vertical-mountain') preset_single_vertical_mountain();
-  else if (v === 'crane-demo') preset_crane_demo();
+// ---------- DOM wiring ----------
+const presetSel   = document.getElementById('preset');
+const btnApply    = document.getElementById('btnApply');
+const btnPlay     = document.getElementById('btnPlay');
+const btnReset    = document.getElementById('btnReset');
+const btnPrev     = document.getElementById('btnStepPrev');
+const btnNext     = document.getElementById('btnStepNext');
+const progress    = document.getElementById('progress');
+const speed       = document.getElementById('speed');
+const easingSel   = document.getElementById('easing');
+const stepInfo    = document.getElementById('stepInfo');
+const btnSnap     = document.getElementById('btnSnap');
+const foldFile    = document.getElementById('foldFile');
+const foldStatus  = document.getElementById('foldStatus');
+const dropHint    = document.getElementById('dropHint');
 
-  drive.currentStep = 0;
-  drive.stepCount = base.count || 1;
+function setFoldStatus(msg, isErr){ foldStatus.textContent = msg; foldStatus.className = isErr? 'muted danger' : 'muted'; }
+
+btnApply.onclick = async () => {
+  const v = presetSel.value;
+  if (v === 'crane-fold'){
+    const json = await fetchCraneFoldInline();
+    if (json){ await handleFOLDObject(json); }
+    else {
+      setFoldStatus('No ./crane.fold found. Use “Load FOLD” or drag & drop a .fold file.', true);
+      sheet.visible = true;
+      if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
+    }
+    drive.play = false; btnPlay.textContent = 'Play';
+    return;
+  }
+  // folding presets
+  sheet.visible = true; if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
+  if (v==='half-vertical-valley') preset_half_vertical_valley();
+  else if (v==='half-horizontal-valley') preset_half_horizontal_valley();
+  else if (v==='diagonal-valley') preset_diagonal_valley();
+  else if (v==='gate-valley') preset_gate_valley();
+  else if (v==='accordion-5') preset_accordion_5();
+  else if (v==='single-vertical-mountain') preset_single_vertical_mountain();
+  else if (v==='crane-demo') preset_crane_demo();
+
+  drive.step = 0; drive.steps = base.count || 1;
   updateStepInfo();
-  camera.position.x += (Math.random()-0.5) * 0.03;
-  camera.position.y += (Math.random()-0.5) * 0.03;
+  camera.position.x += (Math.random()-0.5)*0.03;
+  camera.position.y += (Math.random()-0.5)*0.03;
 };
 presetSel.addEventListener('change', () => btnApply.click());
 
-btnAnim.onclick = () => {
-  drive.animate = !drive.animate;
-  btnAnim.textContent = drive.animate ? 'Pause' : 'Play';
-};
-btnReset.onclick = () => {
-  drive.animate = false; btnAnim.textContent = 'Play';
-  drive.progress = 0; progress.value = '0';
-  drive.currentStep = 0; updateStepInfo();
-};
-btnPrev.onclick = () => {
-  if (drive.currentStep > 0) drive.currentStep--;
-  updateStepInfo();
-};
-btnNext.onclick = () => {
-  if (drive.currentStep < drive.stepCount - 1) drive.currentStep++;
-  updateStepInfo();
-};
-function updateStepInfo(){
-  stepInfo.textContent = `Step ${Math.min(drive.currentStep+1, drive.stepCount)}/${drive.stepCount}`;
-}
+btnPlay.onclick = () => { drive.play = !drive.play; btnPlay.textContent = drive.play ? 'Pause' : 'Play'; };
+btnReset.onclick = () => { drive.play=false; btnPlay.textContent='Play'; drive.progress=0; progress.value='0'; drive.step=0; updateStepInfo(); };
+btnPrev.onclick = () => { if (drive.step>0) drive.step--; updateStepInfo(); };
+btnNext.onclick = () => { if (drive.step<drive.steps-1) drive.step++; updateStepInfo(); };
+function updateStepInfo(){ stepInfo.textContent = `${Math.min(drive.step+1, drive.steps)}/${drive.steps}`; }
+
 progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
 speed.addEventListener('input', () => { drive.speed = parseFloat(speed.value); });
 easingSel.addEventListener('change', () => { drive.easing = easingSel.value; });
@@ -668,21 +656,72 @@ btnSnap.onclick = () => {
   }, 'image/png', 1.0);
 };
 
+foldFile.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0]; if (!file) return;
+  const text = await file.text(); const obj = parseFOLDFromText(text);
+  if (!obj){ setFoldStatus('Invalid JSON in FOLD file.', true); return; }
+  await handleFOLDObject(obj);
+});
+document.addEventListener('dragover', e => { e.preventDefault(); dropHint.style.opacity = '1'; });
+document.addEventListener('dragleave', e => { dropHint.style.opacity = '0.7'; });
+document.addEventListener('drop', async e => {
+  e.preventDefault(); dropHint.style.opacity = '0.7';
+  const file = e.dataTransfer?.files?.[0]; if (!file) return;
+  const text = await file.text(); const obj = parseFOLDFromText(text);
+  if (!obj){ setFoldStatus('Invalid JSON in FOLD file.', true); return; }
+  await handleFOLDObject(obj);
+});
+
+// ---------- Shader Animation (sliders) ----------
+const shaderAuto = document.getElementById('shaderAuto');
+const shaderGlobalSpeed = document.getElementById('shaderGlobalSpeed');
+const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueSpeed = document.getElementById('hueSpeed');
+const iriBase = document.getElementById('iriBase'), iriAmp = document.getElementById('iriAmp'), iriSpeed = document.getElementById('iriSpeed');
+const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmSpeed = document.getElementById('filmSpeed');
+const edgeBase = document.getElementById('edgeBase'), edgeAmp = document.getElementById('edgeAmp'), edgeSpeed = document.getElementById('edgeSpeed');
+const secBase = document.getElementById('secBase'), secAmp = document.getElementById('secAmp'), secSpeed = document.getElementById('secSpeed');
+
+function updateShaderAnim(t){
+  const auto = shaderAuto.value === 'on' ? 1 : 0;
+  const gs = parseFloat(shaderGlobalSpeed.value);
+
+  const HB = parseFloat(hueBase.value),  HA = parseFloat(hueAmp.value),  HS = parseFloat(hueSpeed.value);
+  const IB = parseFloat(iriBase.value),  IA = parseFloat(iriAmp.value),  IS = parseFloat(iriSpeed.value);
+  const FB = parseFloat(filmBase.value), FA = parseFloat(filmAmp.value), FS = parseFloat(filmSpeed.value);
+  const EB = parseFloat(edgeBase.value), EA = parseFloat(edgeAmp.value), ES = parseFloat(edgeSpeed.value);
+  const SB = parseFloat(secBase.value),  SA = parseFloat(secAmp.value),  SS = parseFloat(secSpeed.value);
+
+  uniforms.uHueShift.value     = clamp01(HB + (auto? HA*Math.sin((HS+gs)*t) : 0));
+  uniforms.uIridescence.value  = clamp01(IB + (auto? IA*Math.sin((IS+0.2*gs)*t+1.3) : 0));
+  uniforms.uFilmNm.value       = THREE.MathUtils.clamp(FB + (auto? FA*Math.sin((FS+0.15*gs)*t+0.7) : 0), 100, 800);
+  uniforms.uEdgeGlow.value     = THREE.MathUtils.clamp(EB + (auto? EA*Math.sin((ES+0.25*gs)*t+2.1) : 0), 0.0, 2.0);
+
+  const sVal = SB + (auto? SA*Math.sin((SS+0.12*gs)*t+0.4) : 0);
+  uniforms.uSectors.value = THREE.MathUtils.clamp(Math.round(sVal), 3, 24);
+}
+
 // ---------- Start ----------
-presetSel.value = 'crane-demo';
-btnApply.click();
-progress.value = String(drive.progress);
+function startWithCraneDemo(){
+  presetSel.value = 'crane-demo';
+  btnApply.click();
+  progress.value = String(drive.progress);
+}
+startWithCraneDemo();
 
 // ---------- Per-frame update ----------
-function updateFolding(tSec){
-  computeAngles(tSec);
-  computeEffectiveFrames();
-  pushEffToUniforms();
-}
-function tick(t){
-  const tSec = t * 0.001;
-  uniforms.uTime.value = tSec;
-  updateFolding(tSec);
+function tick(tMs){
+  const t = tMs * 0.001;
+  uniforms.uTime.value = t;
+
+  // Folding
+  computeAngles(t);
+  computeFrames();
+  pushToUniforms();
+
+  // Shader animation
+  updateShaderAnim(t);
+
+  // Render
   controls.update();
   composer.render();
   requestAnimationFrame(tick);
@@ -694,8 +733,5 @@ window.addEventListener('resize', () => {
   const w = window.innerWidth, h = window.innerHeight;
   camera.aspect = w / h; camera.updateProjectionMatrix();
   renderer.setSize(w, h); composer.setSize(w, h);
-  fxaa.material.uniforms.resolution.value.set(1 / w, 1 / h);
+  fxaa.material.uniforms['resolution'].value.set(1 / w, 1 / h);
 });
-
-// ---------- Helpers for sign convention ----------
-// We follow MIT/Ghassaei conventions: valley = +°, mountain = −°. :contentReference[oaicite:4]{index=4}
