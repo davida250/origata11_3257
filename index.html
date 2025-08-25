@@ -2,35 +2,41 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Origata 0.12</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Basic Origami Folds — Works Reliably</title>
     <meta name="theme-color" content="#050509" />
     <style>
       html, body { height: 100%; margin: 0; background: #050509; }
       #app { position: fixed; inset: 0; }
-      .hud {
-        position: fixed; left: 12px; bottom: 12px; z-index: 10;
-        display: flex; gap: 8px; flex-wrap: wrap;
-      }
-      .hud button {
-        padding: 8px 12px;
-        font: 12px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        background: #11131a; color: #e7f2ff; border: 1px solid #2a3244; border-radius: 6px;
-        cursor: pointer;
-      }
-      .hud button:hover { background: #151a22; }
       .brand {
         position: fixed; left: 12px; top: 10px; color: #a6b1c2;
         font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         user-select: none; opacity: 0.9;
       }
       @media (max-width: 560px) { .brand { display: none; } }
+      .hud {
+        position: fixed; left: 12px; bottom: 12px; z-index: 10;
+        display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      }
+      .hud button, .hud select, .hud label, .hud input[type="range"] {
+        padding: 8px 12px;
+        font: 12px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #11131a; color: #e7f2ff; border: 1px solid #2a3244; border-radius: 6px;
+        cursor: pointer;
+      }
+      .hud input[type="range"] {
+        width: 180px; cursor: ew-resize; padding: 0; height: 28px;
+      }
+      .hud button:hover, .hud select:hover, .hud label:hover { background: #151a22; }
     </style>
 
-    <!-- Optional polyfill for older browsers; safe to include -->
-    <script async src="https://unpkg.com/es-module-shims@2.0.8/dist/es-module-shims.js"></script>
+    <!-- Polyfill for older browsers (safe on modern engines) -->
+    <script async src="https://unpkg.com/es-module-shims@2.6.2/dist/es-module-shims.js"></script>
 
-    <!-- Import map for three.js addons + lil-gui -->
+    <!-- Import map: native ESM with three.js addons & lil-gui -->
     <script type="importmap">
     {
       "imports": {
@@ -43,13 +49,27 @@
   </head>
   <body>
     <div id="app"></div>
-    <div class="brand">Origata — click & drag to orbit</div>
+    <div class="brand">Basic Origami Folds — drag to orbit, wheel to zoom</div>
+
     <div class="hud">
-      <button id="btnSnap" title="Download a PNG of the current frame">Save PNG</button>
+      <select id="preset" title="Pick a simple fold that works">
+        <option value="half-vertical-valley">Half Vertical (Valley)</option>
+        <option value="half-horizontal-valley">Half Horizontal (Valley)</option>
+        <option value="diagonal-valley">Diagonal (Valley)</option>
+        <option value="gate-valley">Gate Fold (2 x Valley)</option>
+        <option value="accordion-5">Accordion (5 creases, alt M/V)</option>
+        <option value="single-vertical-mountain">Single Vertical (Mountain)</option>
+      </select>
+      <button id="btnApply">Apply</button>
+
+      <label for="progress">Progress</label>
+      <input id="progress" type="range" min="0" max="1" step="0.001" value="0.7" />
+
+      <button id="btnAnim" title="Toggle animated fold">Animate: Off</button>
+      <button id="btnSnap" title="Save current frame as PNG">Save PNG</button>
     </div>
 
     <script type="module" src="./main.js"></script>
     <noscript>This page needs JavaScript enabled.</noscript>
   </body>
 </html>
-
