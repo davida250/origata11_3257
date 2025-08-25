@@ -1,11 +1,16 @@
 /**
- * Rigid-Hinge Origami — Basic folds that behave like real paper.
- * - Piecewise-rigid: each crease is a zero-thickness hinge (no bending elsewhere).
- * - Sequential: later crease axes are transformed by earlier folds.
- * - Visually identical shader stack: ACES filmic + Bloom + FXAA + iridescent paper.
+ * Origami — Paper-Like Folds + Crane
+ * - Rigid-hinge folds with sequential propagation (later creases move with the paper).
+ * - Adds convex MASKS per crease to simulate regional folds (needed for crane-like steps).
+ * - Two Crane options:
+ *   (A) "Crane (Demo)" — kinematic approximation with masks so it folds step-by-step.
+ *   (B) "Crane (MIT FOLD)" — loads a solver-accurate crane (.fold) exported from
+ *       origamisimulator.org (Examples → Crane (3D)/(flat) → File → Save Simulation as FOLD).  [MIT app supports FOLD export of folded states.] 
+ * - Shader/look preserved (iridescence + fibers + FXAA + ACES); bloom default lowered.
  *
- * MV & angle convention follows MIT’s Origami Simulator / FOLD:
- *   foldAngle ∈ [-180°, 180°], positive = VALLEY, negative = MOUNTAIN.  (Design Tips)  [See README/refs]
+ * Notes / references:
+ * • MIT Origami Simulator folds all creases simultaneously via a GPU solver and exports FOLD/OBJ. :contentReference[oaicite:1]{index=1}
+ * • FOLD format spec + viewer (vertices/edges/faces, assignments, fold angles). :contentReference[oaicite:2]{index=2}
  */
 
 import * as THREE from 'three';
@@ -25,11 +30,11 @@ renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 1.1;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x050509, 5, 30);
+scene.fog = new THREE.Fog(0x050509, 6, 36);
 
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
 camera.position.set(0, 1.8, 5.2);
@@ -39,56 +44,66 @@ controls.enableDamping = true;
 // ---------- Post ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.0, 0.6, 0.15);
+// Lower default bloom strength
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.6, 0.2);
 composer.addPass(bloom);
 const fxaa = new ShaderPass(FXAAShader);
-fxaa.material.uniforms['resolution'].value.set(1 / window.innerWidth, 1 / window.innerHeight);
+fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.innerHeight);
 composer.addPass(fxaa);
 composer.addPass(new OutputPass());
 
 // ---------- Paper geometry ----------
-const WIDTH = 4.0, HEIGHT = 2.4;
-const SEG_X = 180, SEG_Y = 140; // dense grid -> crisp hinges without artifacts
-const geo = new THREE.PlaneGeometry(WIDTH, HEIGHT, SEG_X, SEG_Y);
-geo.rotateX(-0.25);
+const SIZE = 3.0;                  // square paper for crane
+const SEG = 180;                   // dense → crisp hinges
+const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+geo.rotateX(-0.25);                // tilt
 
 // ---------- Math helpers ----------
 const tmp = {
-  v1: new THREE.Vector3(),
-  v2: new THREE.Vector3()
+  v: new THREE.Vector3(),
+  u: new THREE.Vector3(),
 };
 function signedDistance2(p /*Vec3*/, a /*Vec3*/, d /*unit Vec3*/) {
-  // 2D side test in XY (paper plane)
   const px = p.x - a.x, py = p.y - a.y;
-  return d.x * py - d.y * px; // z of 2D cross
+  return d.x * py - d.y * px; // z component of 2D cross
 }
 function rotatePointAroundLine(p, a, axisUnit, ang) {
-  tmp.v1.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a);
-  p.copy(tmp.v1);
+  tmp.v.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a);
+  p.copy(tmp.v);
 }
-function rotateVectorAxis(v, axisUnit, ang) {
-  v.applyAxisAngle(axisUnit, ang);
-}
+function rotateVectorAxis(v, axisUnit, ang) { v.applyAxisAngle(axisUnit, ang); }
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+const Easings = {
+  linear: t => t,
+  smoothstep: t => t*t*(3-2*t),
+  easeInOutCubic: t => (t<0.5? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2)
+};
 
-// ---------- Crease sequence (ordered) ----------
-const MAX_CREASES = 16; // enough for our basic folds
+// ---------- Creases + MASKS ----------
+const MAX_CREASES = 24;
+const MAX_MASKS_PER = 4;
+
 const base = {
   count: 0,
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
-  amp:  new Array(MAX_CREASES).fill(0),   // |angle| in radians (target)
-  sign: new Array(MAX_CREASES).fill(1),   // +1=VALLEY, -1=MOUNTAIN
-  phase:new Array(MAX_CREASES).fill(0)    // for animation
+  amp:  new Array(MAX_CREASES).fill(0),      // |angle| in radians
+  sign: new Array(MAX_CREASES).fill(1),      // +1=valley, -1=mountain
+  // convex mask: up to 4 half-planes (point, dir) — region folds like "petal"
+  mCount: new Array(MAX_CREASES).fill(0),
+  mA:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
+  mD:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0))),
+  phase:new Array(MAX_CREASES).fill(0)       // per-crease anim phase
 };
 function resetBase(){
   base.count = 0;
   for (let i=0;i<MAX_CREASES;i++){
-    base.A[i].set(0,0,0);
-    base.D[i].set(1,0,0);
-    base.amp[i]=0; base.sign[i]=1; base.phase[i]=0;
+    base.A[i].set(0,0,0); base.D[i].set(1,0,0);
+    base.amp[i]=0; base.sign[i]=1; base.phase[i]=0; base.mCount[i]=0;
+    for (let m=0;m<MAX_MASKS_PER;m++){ base.mA[i][m].set(0,0,0); base.mD[i][m].set(1,0,0); }
   }
 }
-function addCrease(Ax, Ay, Dx, Dy, deg=180, sign=+1){
+function addCrease({ Ax=0, Ay=0, Dx=1, Dy=0, deg=180, sign=+1, masks=[] }){
   if (base.count >= MAX_CREASES) return;
   const i = base.count++;
   const d = new THREE.Vector2(Dx, Dy).normalize();
@@ -97,49 +112,75 @@ function addCrease(Ax, Ay, Dx, Dy, deg=180, sign=+1){
   base.amp[i]  = THREE.MathUtils.degToRad(Math.max(0, Math.min(180, Math.abs(deg))));
   base.sign[i] = sign >= 0 ? +1 : -1;
   base.phase[i]= Math.random()*Math.PI*2;
+  base.mCount[i] = Math.min(MAX_MASKS_PER, masks.length);
+  for (let m=0;m<base.mCount[i];m++){
+    const mk = masks[m];
+    const dd = new THREE.Vector2(mk.Dx, mk.Dy).normalize();
+    base.mA[i][m].set(mk.Ax, mk.Ay, 0);
+    base.mD[i][m].set(dd.x, dd.y, 0);
+  }
 }
 
-// ---------- Effective axes (sequential propagation) ----------
+// ---------- Effective axes + masks (sequential propagation) ----------
 const eff = {
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
-  ang: new Float32Array(MAX_CREASES)
+  ang: new Float32Array(MAX_CREASES),
+  mCount: new Int32Array(MAX_CREASES),
+  mA:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
+  mD:  Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0))),
 };
 
-const drive = { animate:false, speed:0.9, progress:0.7 };
-function computeAngles(tSec){
-  for (let i=0;i<base.count;i++){
-    const t = drive.animate ? (0.5 + 0.5*Math.sin(tSec*drive.speed + base.phase[i])) : drive.progress;
-    eff.ang[i] = base.sign[i] * base.amp[i] * t;
-  }
-  for (let i=base.count;i<MAX_CREASES;i++) eff.ang[i] = 0;
-}
-function computeEffectiveAxes(){
-  // start from base
-  for (let i=0;i<base.count;i++){
-    eff.A[i].copy(base.A[i]);
-    eff.D[i].copy(base.D[i]).normalize();
-  }
-  // propagate: rotate later crease frames by earlier folds
-  for (let j=0;j<base.count;j++){
-    const Aj = eff.A[j];
-    const Dj = eff.D[j].clone().normalize();
-    const angle = eff.ang[j];
-    if (Math.abs(angle) < 1e-8) continue;
+const drive = { animate:false, speed:0.9, progress:0.7, easing:'smoothstep', currentStep:0, stepCount:1 };
 
+// angles per crease, respecting step boundaries
+function computeAngles(tSec){
+  const E = Easings[drive.easing] || Easings.linear;
+  for (let i=0;i<base.count;i++){
+    // piecewise step easing: only fold up to current step; earlier steps stay at 1
+    let localT = 0;
+    if (i < drive.currentStep) localT = 1;
+    else if (i === drive.currentStep) localT = drive.animate ? (0.5 + 0.5*Math.sin(tSec*drive.speed + base.phase[i])) : drive.progress;
+    else localT = 0;
+    localT = E(clamp01(localT));
+    eff.ang[i] = base.sign[i] * base.amp[i] * localT;
+    eff.mCount[i] = base.mCount[i];
+  }
+}
+
+// propagate axes and mask lines by earlier folds (crisp hinge: only + side moves)
+function computeEffectiveFrames(){
+  // base copy
+  for (let i=0;i<base.count;i++){
+    eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize();
+    for (let m=0;m<MAX_MASKS_PER;m++){
+      eff.mA[i][m].copy(base.mA[i][m]);
+      eff.mD[i][m].copy(base.mD[i][m]).normalize();
+    }
+  }
+  // sequentially rotate future creases & their masks
+  for (let j=0;j<base.count;j++){
+    const Aj = eff.A[j]; const Dj = eff.D[j].clone().normalize();
+    const ang = eff.ang[j]; if (Math.abs(ang) < 1e-7) continue;
     for (let k=j+1;k<base.count;k++){
       const sd = signedDistance2(eff.A[k], Aj, Dj);
-      // CRISP HINGE: rotate only the positive side; negative side fixed
       if (sd > 0.0){
-        rotatePointAroundLine(eff.A[k], Aj, Dj, angle);
-        rotateVectorAxis(eff.D[k], Dj, angle);
-        eff.D[k].normalize();
+        rotatePointAroundLine(eff.A[k], Aj, Dj, ang);
+        rotateVectorAxis(eff.D[k], Dj, ang); eff.D[k].normalize();
+        // masks move with paper on the rotated side
+        for (let m=0;m<MAX_MASKS_PER;m++){
+          const sdM = signedDistance2(eff.mA[k][m], Aj, Dj);
+          if (sdM > 0.0){
+            rotatePointAroundLine(eff.mA[k][m], Aj, Dj, ang);
+            rotateVectorAxis(eff.mD[k][m], Dj, ang); eff.mD[k][m].normalize();
+          }
+        }
       }
     }
   }
 }
 
-// ---------- Uniforms (kept look; folding data is rigid & crisp) ----------
+// ---------- Uniforms ----------
 const uniforms = {
   uTime:       { value: 0 },
   uSectors:    { value: 10.0 },
@@ -148,12 +189,18 @@ const uniforms = {
   uFilmIOR:    { value: 1.35 },
   uFilmNm:     { value: 360.0 },
   uFiber:      { value: 0.35 },
-  uEdgeGlow:   { value: 0.9 },
+  uEdgeGlow:   { value: 0.8 },
 
+  // folding data
   uCreaseCount: { value: 0 },
   uAeff:  { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3()) },
   uDeff:  { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3(1,0,0)) },
-  uAng:   { value: new Float32Array(MAX_CREASES) }
+  uAng:   { value: new Float32Array(MAX_CREASES) },
+
+  // masks
+  uMaskA: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3()) },
+  uMaskD: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3(1,0,0)) },
+  uMaskOn:{ value: new Float32Array(MAX_CREASES*MAX_MASKS_PER) }
 };
 
 function pushEffToUniforms(){
@@ -161,19 +208,40 @@ function pushEffToUniforms(){
   uniforms.uAeff.value = eff.A.map(v => v.clone());
   uniforms.uDeff.value = eff.D.map(v => v.clone());
   uniforms.uAng.value  = Float32Array.from(eff.ang);
-  mat.uniformsNeedUpdate = true; // force re-upload
+
+  const flatA = []; const flatD = []; const on = [];
+  for (let i=0;i<base.count;i++){
+    for (let m=0;m<MAX_MASKS_PER;m++){
+      flatA.push(eff.mA[i][m].clone());
+      flatD.push(eff.mD[i][m].clone());
+      on.push(m < eff.mCount[i] ? 1 : 0);
+    }
+  }
+  // pad remainder
+  const remain = MAX_CREASES*MAX_MASKS_PER - flatA.length;
+  for (let r=0;r<remain;r++){ flatA.push(new THREE.Vector3()); flatD.push(new THREE.Vector3(1,0,0)); on.push(0); }
+  uniforms.uMaskA.value = flatA;
+  uniforms.uMaskD.value = flatD;
+  uniforms.uMaskOn.value = Float32Array.from(on);
+
+  mat.uniformsNeedUpdate = true;
 }
 
 // ---------- Shaders ----------
-// Vertex: piecewise-rigid folding (no smoothing band, like real paper)
-// Fragment: same psychedelic paper (iridescence+fibers+bloom)
 const vs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
+  #define MAX_MASKS_PER ${MAX_MASKS_PER}
   precision highp float;
+
   uniform int   uCreaseCount;
   uniform vec3  uAeff[MAX_CREASES];
   uniform vec3  uDeff[MAX_CREASES];
   uniform float uAng[MAX_CREASES];
+
+  uniform vec3  uMaskA[MAX_CREASES*MAX_MASKS_PER];
+  uniform vec3  uMaskD[MAX_CREASES*MAX_MASKS_PER];
+  uniform float uMaskOn[MAX_CREASES*MAX_MASKS_PER];
+
   varying vec3 vPos; varying vec3 vN; varying vec3 vLocal; varying vec2 vUv;
 
   vec3 rotateAroundLine(vec3 p, vec3 a, vec3 u, float ang){
@@ -185,8 +253,21 @@ const vs = /* glsl */`
     return v*c + cross(u, v)*s + u*dot(u, v)*(1.0 - c);
   }
   float signedDistanceToLine(vec2 p, vec2 a, vec2 d){
-    // z of 2D cross, sign is which side of the crease we're on
     return d.x*(p.y - a.y) - d.y*(p.x - a.x);
+  }
+  bool inMask(int i, vec2 p){
+    // each crease uses MAX_MASKS_PER entries, active if uMaskOn[idx] > 0.5
+    for (int m=0; m<MAX_MASKS_PER; m++){
+      int idx = i*MAX_MASKS_PER + m;
+      if (uMaskOn[idx] > 0.5) {
+        vec2 a = uMaskA[idx].xy;
+        vec2 d = normalize(uMaskD[idx].xy);
+        // inside means on positive side of every half-plane
+        float sd = d.x*(p.y - a.y) - d.y*(p.x - a.x);
+        if (sd <= 0.0) return false;
+      }
+    }
+    return true;
   }
 
   void main(){
@@ -196,12 +277,13 @@ const vs = /* glsl */`
 
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
+
       vec3 a = uAeff[i];
       vec3 d = normalize(uDeff[i]);
 
-      // CRISP HINGE: rotate ONLY the positive side; negative side remains
+      // crisp hinge on positive side, AND inside mask (if any)
       float sd = signedDistanceToLine(p.xy, a.xy, d.xy);
-      if (sd > 0.0){
+      if (sd > 0.0 && inMask(i, p.xy)){
         p = rotateAroundLine(p, a, d, uAng[i]);
         n = normalize(rotateVector(n, d, uAng[i]));
       }
@@ -218,15 +300,12 @@ const vs = /* glsl */`
 const fs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
   precision highp float;
-
   uniform float uTime;
   uniform float uSectors, uHueShift;
   uniform float uIridescence, uFilmIOR, uFilmNm, uFiber, uEdgeGlow;
-
   uniform int   uCreaseCount;
   uniform vec3  uAeff[MAX_CREASES];
   uniform vec3  uDeff[MAX_CREASES];
-
   varying vec3 vPos; varying vec3 vN; varying vec3 vLocal; varying vec2 vUv;
 
   #define PI 3.14159265359
@@ -257,12 +336,11 @@ const fs = /* glsl */`
   }
 
   void main(){
-    // Kaleidoscopic mapping in XZ (same look)
+    // psychedelic kaleidoscope, unchanged look
     float theta = atan(vPos.z, vPos.x);
     float r = length(vPos.xz) * 0.55;
     float seg = 2.0*PI / max(3.0, uSectors);
-    float a = mod(theta, seg);
-    a = abs(a - 0.5*seg);
+    float a = mod(theta, seg); a = abs(a - 0.5*seg);
     vec2 k = vec2(cos(a), sin(a)) * r;
 
     vec2 q = k*2.0 + vec2(0.15*uTime, -0.1*uTime);
@@ -271,7 +349,7 @@ const fs = /* glsl */`
     float hue = fract(n + 0.15*sin(uTime*0.3) + uHueShift);
     vec3 baseCol = hsv2rgb(vec3(hue, 0.9, smoothstep(0.25, 1.0, n)));
 
-    // Paper fibers + grain
+    // paper fiber + grain
     float fiberLines = 0.0;
     {
       float warp = fbm(vLocal.xy*4.0 + vec2(0.2*uTime, -0.1*uTime));
@@ -282,7 +360,7 @@ const fs = /* glsl */`
     float grain = fbm(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
-    // Crease glow (distance to nearest effective crease)
+    // crease glow
     float minD = 1e9;
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
@@ -294,7 +372,7 @@ const fs = /* glsl */`
     float aa = fwidth(minD);
     float edge = 1.0 - smoothstep(0.0025, 0.0025 + aa, minD);
 
-    // Iridescence
+    // iridescence
     vec3 V = normalize(cameraPosition - vPos);
     vec3 N = normalize(vN);
     float cosT = clamp(dot(N, V), 0.0, 1.0);
@@ -302,7 +380,7 @@ const fs = /* glsl */`
     float F = pow(1.0 - cosT, 5.0);
     vec3 col = mix(baseCol, mix(baseCol, film, uIridescence), F);
 
-    col += uEdgeGlow * edge * film * 0.7;
+    col += uEdgeGlow * edge * film * 0.6;
 
     float vign = smoothstep(1.2, 0.2, length(vUv-0.5)*1.2);
     gl_FragColor = vec4(col*vign, 1.0);
@@ -310,11 +388,8 @@ const fs = /* glsl */`
 `;
 
 const mat = new THREE.ShaderMaterial({
-  vertexShader: vs,
-  fragmentShader: fs,
-  uniforms,
-  side: THREE.DoubleSide,
-  extensions: { derivatives: true }
+  vertexShader: vs, fragmentShader: fs, uniforms,
+  side: THREE.DoubleSide, extensions: { derivatives: true }
 });
 const sheet = new THREE.Mesh(geo, mat);
 scene.add(sheet);
@@ -325,7 +400,7 @@ scene.add(new THREE.Mesh(
   new THREE.MeshBasicMaterial({ color: 0x070711, side: THREE.BackSide })
 ));
 
-// ---------- GUI (look tuning) ----------
+// ---------- GUI (optional look tweaks) ----------
 const gui = new GUI();
 const looks = gui.addFolder('Look');
 looks.add(uniforms.uSectors, 'value', 3, 24, 1).name('kaleidoSectors');
@@ -335,62 +410,225 @@ looks.add(uniforms.uFilmIOR, 'value', 1.0, 2.333, 0.001).name('filmIOR');
 looks.add(uniforms.uFilmNm, 'value', 100, 800, 1).name('filmThickness(nm)');
 looks.add(uniforms.uFiber, 'value', 0, 1, 0.001).name('paperFiber');
 looks.add(uniforms.uEdgeGlow, 'value', 0.0, 2.0, 0.01).name('edgeGlow');
-looks.add(bloom, 'strength', 0.0, 2.5, 0.01).name('bloomStrength');
+looks.add(bloom, 'strength', 0.0, 2.5, 0.01).name('bloomStrength');  // starts at 0.35
 looks.add(bloom, 'radius', 0.0, 1.5, 0.01).name('bloomRadius');
 looks.open();
 
-// ---------- Simple presets (paper-like) ----------
+// ---------- Presets (simple, paper-like) ----------
 const VALLEY = +1, MOUNTAIN = -1;
 
 function preset_half_vertical_valley(){
   resetBase();
-  addCrease(0, 0, 0, 1, 180, VALLEY); // x=0 vertical hinge
+  addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
 }
 function preset_half_horizontal_valley(){
   resetBase();
-  addCrease(0, 0, 1, 0, 180, VALLEY); // y=0 horizontal hinge
+  addCrease({ Ax:0, Ay:0, Dx:1, Dy:0, deg:180, sign:VALLEY });
 }
 function preset_diagonal_valley(){
   resetBase();
-  addCrease(0, 0, 1, 1, 180, VALLEY); // main diagonal
+  addCrease({ Ax:0, Ay:0, Dx:1, Dy:1, deg:180, sign:VALLEY });
 }
 function preset_gate_valley(){
   resetBase();
-  const x = WIDTH * 0.25;        // quarter folds to center
-  addCrease(+x, 0, 0, 1, 180, VALLEY);
-  addCrease(-x, 0, 0, 1, 180, VALLEY);
+  const x = SIZE*0.25;
+  addCrease({ Ax:+x, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
+  addCrease({ Ax:-x, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
 }
 function preset_accordion_5(){
   resetBase();
   const n = 5;
   for (let i=1;i<=n;i++){
-    const x = THREE.MathUtils.lerp(-WIDTH/2, WIDTH/2, i/(n+1));
+    const x = THREE.MathUtils.lerp(-SIZE/2, SIZE/2, i/(n+1));
     const sign = (i % 2 === 1) ? VALLEY : MOUNTAIN;
-    addCrease(x, 0, 0, 1, 180, sign);
+    addCrease({ Ax:x, Ay:0, Dx:0, Dy:1, deg:180, sign });
   }
 }
 function preset_single_vertical_mountain(){
   resetBase();
-  addCrease(0, 0, 0, 1, 180, MOUNTAIN);
+  addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:180, sign:MOUNTAIN });
 }
-function applyPreset(key){
-  if (key === 'half-vertical-valley') preset_half_vertical_valley();
-  else if (key === 'half-horizontal-valley') preset_half_horizontal_valley();
-  else if (key === 'diagonal-valley') preset_diagonal_valley();
-  else if (key === 'gate-valley') preset_gate_valley();
-  else if (key === 'accordion-5') preset_accordion_5();
-  else if (key === 'single-vertical-mountain') preset_single_vertical_mountain();
+
+// ---------- Crane (Demo) — sequential masked folds ----------
+// This is a compact, crane-like demo that uses convex masks to localize folds (petals/reverse).
+// It’s *not* a perfect historical sequence but kinematically behaves like paper and reads as a crane.
+function preset_crane_demo(){
+  resetBase();
+  const s = SIZE/2;
+
+  // Step 0: diagonal valley (pre-crease / collapse bias)
+  addCrease({ Ax:0, Ay:0, Dx:1, Dy:1, deg:180, sign:VALLEY });
+
+  // Step 1: opposite diagonal valley
+  addCrease({ Ax:0, Ay:0, Dx:1, Dy:-1, deg:180, sign:VALLEY });
+
+  // Step 2: central vertical valley — masked top half (start neck/tail split)
+  addCrease({
+    Ax:0, Ay:0, Dx:0, Dy:1, deg:150, sign:VALLEY,
+    masks:[ // diamond-ish mask: top region
+      { Ax:0, Ay:0.00, Dx:0, Dy:1 },   // above y=0
+      { Ax:-0.0001, Ay:-0.0001, Dx: 1, Dy: 1 },  // right of diag
+      { Ax: 0.0001, Ay:-0.0001, Dx:-1, Dy: 1 },  // left of anti-diag
+    ]
+  });
+
+  // Step 3: central vertical mountain — masked bottom half
+  addCrease({
+    Ax:0, Ay:0, Dx:0, Dy:1, deg:150, sign:MOUNTAIN,
+    masks:[
+      { Ax:0, Ay:0.00, Dx:0, Dy:-1 },  // below y=0
+      { Ax:-0.0001, Ay: 0.0001, Dx: 1, Dy:-1 },
+      { Ax: 0.0001, Ay: 0.0001, Dx:-1, Dy:-1 },
+    ]
+  });
+
+  // Step 4: wing right — diagonal valley masked right triangle
+  addCrease({
+    Ax:0, Ay:0, Dx:1, Dy:-1, deg:120, sign:VALLEY,
+    masks:[
+      { Ax:0, Ay:0, Dx:0, Dy:1 },     // y>0
+      { Ax:0, Ay:0, Dx:1, Dy:0 },     // x>0
+    ]
+  });
+
+  // Step 5: wing left — diagonal valley masked left triangle
+  addCrease({
+    Ax:0, Ay:0, Dx:1, Dy:1, deg:120, sign:VALLEY,
+    masks:[
+      { Ax:0, Ay:0, Dx:0, Dy:1 },     // y>0
+      { Ax:0, Ay:0, Dx:-1, Dy:0 },    // x<0
+    ]
+  });
+
+  // Step 6: tail inside-reverse (approx) — steep diagonal with small mask
+  addCrease({
+    Ax:0.0, Ay:-0.3*s, Dx:1, Dy:-0.15, deg:140, sign:VALLEY,
+    masks:[
+      { Ax:0, Ay:-0.1, Dx:0, Dy:-1 }, // below slightly negative y
+      { Ax: 0.0, Ay:0.0, Dx:1, Dy:0 }, // x>0
+    ]
+  });
+
+  // Step 7: neck inside-reverse (approx) — mirror of tail
+  addCrease({
+    Ax:0.0, Ay:-0.3*s, Dx:-1, Dy:-0.15, deg:140, sign:VALLEY,
+    masks:[
+      { Ax:0, Ay:-0.1, Dx:0, Dy:-1 }, // below slightly negative y
+      { Ax: 0.0, Ay:0.0, Dx:-1, Dy:0 }, // x<0
+    ]
+  });
+
+  // Step 8: head — small mountain
+  addCrease({
+    Ax:-0.45*s, Ay:-0.65*s, Dx:1, Dy:-0.2, deg:90, sign:MOUNTAIN,
+    masks:[
+      { Ax:-0.1, Ay:-0.2, Dx:-1, Dy:-1 },
+      { Ax:-0.2, Ay:-0.2, Dx:-1, Dy: 0 },
+    ]
+  });
+
+  drive.currentStep = 0;
+  drive.stepCount = base.count;
+}
+
+// ---------- Crane (MIT FOLD) loader ----------
+// If ./crane.fold (JSON/FOLD) exists in the repo, this will load and show it as a separate mesh
+// shaded with the same fragment shader (no folding engine; it is already folded by the solver).
+let craneMesh = null;
+async function tryLoadCraneFOLD(){
+  try{
+    const res = await fetch('./crane.fold');
+    if (!res.ok) throw new Error('no crane.fold found');
+    const fold = await res.json();
+
+    // minimal FOLD: vertices_coords (2D or 3D), faces_vertices
+    const verts = fold.vertices_coords || fold.vertices_coords3d || [];
+    const faces = fold.faces_vertices || [];
+    if (!verts.length || !faces.length) throw new Error('invalid FOLD');
+
+    // build geometry
+    const g = new THREE.BufferGeometry();
+    // triangulate simple polygons naively (fan) for demo; MIT exports are triangulated often. :contentReference[oaicite:3]{index=3}
+    const pos = [];
+    for (const f of faces){
+      if (f.length < 3) continue;
+      for (let i=1;i+1<f.length;i++){
+        const tri = [f[0], f[i], f[i+1]];
+        for (const vi of tri){
+          const v = verts[vi];
+          const x = v[0], y = v[1], z = (v.length>2? v[2]: 0);
+          pos.push(x, y, z);
+        }
+      }
+    }
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+
+    const mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({
+      vertexShader: vs, fragmentShader: fs, uniforms, side: THREE.DoubleSide
+    }));
+
+    if (craneMesh) scene.remove(craneMesh);
+    craneMesh = mesh;
+    craneMesh.position.set(0, 0, 0.001); // avoid z-fight
+    scene.add(craneMesh);
+    sheet.visible = false; // hide folding sheet; we’re viewing solver result
+    return true;
+  }catch(e){
+    if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
+    sheet.visible = true;
+    return false;
+  }
 }
 
 // ---------- DOM controls ----------
 const presetSel = document.getElementById('preset');
 const btnApply  = document.getElementById('btnApply');
 const btnAnim   = document.getElementById('btnAnim');
+const btnReset  = document.getElementById('btnReset');
+const btnPrev   = document.getElementById('btnStepPrev');
+const btnNext   = document.getElementById('btnStepNext');
 const btnSnap   = document.getElementById('btnSnap');
 const progress  = document.getElementById('progress');
+const speed     = document.getElementById('speed');
+const easingSel = document.getElementById('easing');
+const stepInfo  = document.getElementById('stepInfo');
 
-btnApply.onclick = () => {
-  applyPreset(presetSel.value);
+btnApply.onclick = async () => {
+  const v = presetSel.value;
+
+  if (v === 'crane-fold'){
+    const ok = await tryLoadCraneFOLD();
+    if (!ok){
+      alert(
+`Place a solver-exported FOLD file at:
+  ./crane.fold
+
+Get one from origamisimulator.org:
+  Examples → Crane (3D) or Crane (flat)
+  File → Save Simulation as… → FOLD
+(Then refresh.)`
+      );
+    }
+    drive.animate = false; btnAnim.textContent = 'Play';
+    return;
+  }
+
+  // otherwise we’re using our folding sheet
+  sheet.visible = true;
+  if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
+
+  if (v === 'half-vertical-valley') preset_half_vertical_valley();
+  else if (v === 'half-horizontal-valley') preset_half_horizontal_valley();
+  else if (v === 'diagonal-valley') preset_diagonal_valley();
+  else if (v === 'gate-valley') preset_gate_valley();
+  else if (v === 'accordion-5') preset_accordion_5();
+  else if (v === 'single-vertical-mountain') preset_single_vertical_mountain();
+  else if (v === 'crane-demo') preset_crane_demo();
+
+  drive.currentStep = 0;
+  drive.stepCount = base.count || 1;
+  updateStepInfo();
   camera.position.x += (Math.random()-0.5) * 0.03;
   camera.position.y += (Math.random()-0.5) * 0.03;
 };
@@ -398,9 +636,27 @@ presetSel.addEventListener('change', () => btnApply.click());
 
 btnAnim.onclick = () => {
   drive.animate = !drive.animate;
-  btnAnim.textContent = 'Animate: ' + (drive.animate ? 'On' : 'Off');
+  btnAnim.textContent = drive.animate ? 'Pause' : 'Play';
 };
+btnReset.onclick = () => {
+  drive.animate = false; btnAnim.textContent = 'Play';
+  drive.progress = 0; progress.value = '0';
+  drive.currentStep = 0; updateStepInfo();
+};
+btnPrev.onclick = () => {
+  if (drive.currentStep > 0) drive.currentStep--;
+  updateStepInfo();
+};
+btnNext.onclick = () => {
+  if (drive.currentStep < drive.stepCount - 1) drive.currentStep++;
+  updateStepInfo();
+};
+function updateStepInfo(){
+  stepInfo.textContent = `Step ${Math.min(drive.currentStep+1, drive.stepCount)}/${drive.stepCount}`;
+}
 progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
+speed.addEventListener('input', () => { drive.speed = parseFloat(speed.value); });
+easingSel.addEventListener('change', () => { drive.easing = easingSel.value; });
 
 btnSnap.onclick = () => {
   renderer.domElement.toBlob((blob) => {
@@ -412,17 +668,17 @@ btnSnap.onclick = () => {
   }, 'image/png', 1.0);
 };
 
-// ---------- Start with an obvious fold ----------
-applyPreset('half-vertical-valley');
+// ---------- Start ----------
+presetSel.value = 'crane-demo';
+btnApply.click();
 progress.value = String(drive.progress);
 
 // ---------- Per-frame update ----------
 function updateFolding(tSec){
   computeAngles(tSec);
-  computeEffectiveAxes();
+  computeEffectiveFrames();
   pushEffToUniforms();
 }
-
 function tick(t){
   const tSec = t * 0.001;
   uniforms.uTime.value = tSec;
@@ -438,5 +694,8 @@ window.addEventListener('resize', () => {
   const w = window.innerWidth, h = window.innerHeight;
   camera.aspect = w / h; camera.updateProjectionMatrix();
   renderer.setSize(w, h); composer.setSize(w, h);
-  fxaa.material.uniforms['resolution'].value.set(1 / w, 1 / h);
+  fxaa.material.uniforms.resolution.value.set(1 / w, 1 / h);
 });
+
+// ---------- Helpers for sign convention ----------
+// We follow MIT/Ghassaei conventions: valley = +°, mountain = −°. :contentReference[oaicite:4]{index=4}
