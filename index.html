@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Psychedelic Origami — Paper-like Folds + Crane + Shader Anim</title>
+  <title>Origami — 3 Working Models (Crane + 2 basics)</title>
   <meta name="theme-color" content="#050509" />
   <style>
     html, body { height: 100%; margin: 0; background: #050509; }
@@ -17,33 +17,28 @@
 
     .hud {
       position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 10;
-      display: grid; gap: 10px;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      color: #e7f2ff;
+      display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e7f2ff;
     }
-    .panel {
-      background: #10131a; border: 1px solid #2a3244; border-radius: 8px; padding: 10px;
-    }
+    .panel { background: #10131a; border: 1px solid #2a3244; border-radius: 8px; padding: 10px; }
+    .panel h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #9eb3d1; }
     .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
     .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
-    .panel h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #9eb3d1; }
     select, button, input[type="range"], label.file-btn {
       padding: 8px 10px; background: #11131a; color: #e7f2ff; border: 1px solid #2a3244; border-radius: 6px; cursor: pointer;
     }
     input[type="range"] { cursor: ew-resize; height: 28px; }
     button:hover, select:hover, input[type="range"]:hover, label.file-btn:hover { background: #161a23; }
-    .muted { opacity: 0.85; }
     #foldFile { display: none; }
-    .dropHint { border: 1px dashed #2a3244; padding: 8px; text-align: center; border-radius: 6px; }
+    .muted { opacity: 0.85; }
     .danger { color: #ff8899; }
   </style>
 
-  <!-- ESM polyfill (safe to include) -->
+  <!-- Polyfill so import maps work on every modern engine -->
   <script async src="https://unpkg.com/es-module-shims@2.6.2/dist/es-module-shims.js"></script>
 
-  <!-- Import map: three.js + lil-gui + earcut -->
+  <!-- Import map: three.js + lil-gui + earcut (for triangulating FOLD faces) -->
   <script type="importmap">
   {
     "imports": {
@@ -57,26 +52,17 @@
 </head>
 <body>
   <div id="app"></div>
-  <div class="brand">Psychedelic Origami — rigid hinges • drag to orbit, wheel to zoom</div>
+  <div class="brand">Origami — drag to orbit, wheel to zoom</div>
 
   <div class="hud">
-    <!-- Folding controls -->
+    <!-- Models (exactly 3) -->
     <div class="panel">
-      <h3>Folding</h3>
+      <h3>Models</h3>
       <div class="row">
         <select id="preset">
-          <optgroup label="Simple (paper-like)">
-            <option value="half-vertical-valley">Half Vertical (Valley)</option>
-            <option value="half-horizontal-valley">Half Horizontal (Valley)</option>
-            <option value="diagonal-valley">Diagonal (Valley)</option>
-            <option value="gate-valley">Gate (2× Valley)</option>
-            <option value="accordion-5">Accordion (5 creases, alt M/V)</option>
-            <option value="single-vertical-mountain">Single Vertical (Mountain)</option>
-          </optgroup>
-          <optgroup label="Crane">
-            <option value="crane-demo">Crane (Demo)</option>
-            <option value="crane-fold">Crane (MIT FOLD import)</option>
-          </optgroup>
+          <option value="half-vertical-valley">Half Vertical (Valley)</option>
+          <option value="diagonal-valley">Diagonal (Valley)</option>
+          <option value="crane-fold">Crane (MIT FOLD import)</option>
         </select>
         <button id="btnApply">Apply</button>
       </div>
@@ -84,81 +70,52 @@
         <label>Fold Progress <input id="progress" type="range" min="0" max="1" step="0.001" value="0.7" /></label>
         <div class="row" style="gap:6px">
           <button id="btnPlay">Play</button>
-          <button id="btnReset">Reset</button>
+          <button id="btnSnap">Save PNG</button>
         </div>
       </div>
       <div class="row" style="margin-top:8px">
-        <label>Step <span id="stepInfo" class="muted">1/1</span></label>
-        <div class="row" style="gap:6px">
-          <button id="btnStepPrev">◀</button>
-          <button id="btnStepNext">▶</button>
-        </div>
-      </div>
-      <div class="row3" style="margin-top:8px">
-        <label>Fold Speed <input id="speed" type="range" min="0.05" max="3" step="0.01" value="0.9" /></label>
-        <label>Easing
-          <select id="easing">
-            <option value="linear">linear</option>
-            <option value="smoothstep" selected>smoothstep</option>
-            <option value="easeInOutCubic">easeInOutCubic</option>
-          </select>
-        </label>
-        <button id="btnSnap">Save PNG</button>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <label class="file-btn" for="foldFile" title="Load a .fold/.json (FOLD format)">Load FOLD</label>
+        <label class="file-btn" for="foldFile" title="Load a crane .fold/.json file">Load FOLD</label>
         <input id="foldFile" type="file" accept=".fold,.json" />
-        <div id="foldStatus" class="muted">Drop a .fold here or click “Load FOLD”.</div>
+        <div id="foldStatus" class="muted">Pick “Crane (MIT FOLD import)”, then load/export a <b>crane.fold</b> from origamisimulator.org.</div>
       </div>
-      <div id="dropHint" class="dropHint muted" style="margin-top:6px">Drag &amp; drop a <b>.fold</b> file anywhere on the page</div>
     </div>
 
-    <!-- Shader animation controls -->
+    <!-- Shader animation sliders (texture look) -->
     <div class="panel">
-      <h3>Shader Animation (sliders)</h3>
+      <h3>Shader Animation</h3>
       <div class="row2">
-        <label>Auto Animate <select id="shaderAuto">
-          <option value="off">off</option>
-          <option value="on" selected>on</option>
-        </select></label>
+        <label>Auto Animate
+          <select id="shaderAuto">
+            <option value="off">off</option>
+            <option value="on" selected>on</option>
+          </select>
+        </label>
         <label>Global Speed <input id="shaderGlobalSpeed" type="range" min="0" max="2" step="0.01" value="0.25" /></label>
       </div>
 
-      <div style="margin-top:8px" class="row3">
+      <div class="row3" style="margin-top:6px">
         <label>Hue Base <input id="hueBase" type="range" min="0" max="1" step="0.001" value="0.0" /></label>
-        <label>Hue Amp <input id="hueAmp" type="range" min="0" max="1" step="0.001" value="0.25" /></label>
-        <label>Hue Speed <input id="hueSpeed" type="range" min="0" max="2" step="0.01" value="0.3" /></label>
+        <label>Hue Amp  <input id="hueAmp"  type="range" min="0" max="1" step="0.001" value="0.25" /></label>
+        <label>Hue Speed<input id="hueSpeed"type="range" min="0" max="2" step="0.01" value="0.3" /></label>
       </div>
 
-      <div style="margin-top:6px" class="row3">
-        <label>Iridesc. Base <input id="iriBase" type="range" min="0" max="1" step="0.001" value="0.65" /></label>
-        <label>Iridesc. Amp <input id="iriAmp" type="range" min="0" max="1" step="0.001" value="0.2" /></label>
-        <label>Iridesc. Speed <input id="iriSpeed" type="range" min="0" max="2" step="0.01" value="0.2" /></label>
-      </div>
-
-      <div style="margin-top:6px" class="row3">
+      <div class="row3" style="margin-top:6px">
         <label>Film nm Base <input id="filmBase" type="range" min="100" max="800" step="1" value="360" /></label>
-        <label>Film nm Amp <input id="filmAmp" type="range" min="0" max="300" step="1" value="140" /></label>
-        <label>Film nm Speed <input id="filmSpeed" type="range" min="0" max="2" step="0.01" value="0.15" /></label>
+        <label>Film nm Amp  <input id="filmAmp"  type="range" min="0" max="300" step="1" value="140" /></label>
+        <label>Film nm Speed<input id="filmSpeed"type="range" min="0" max="2" step="0.01" value="0.15" /></label>
       </div>
 
-      <div style="margin-top:6px" class="row3">
-        <label>EdgeGlow Base <input id="edgeBase" type="range" min="0" max="2" step="0.01" value="0.8" /></label>
-        <label>EdgeGlow Amp <input id="edgeAmp" type="range" min="0" max="2" step="0.01" value="0.4" /></label>
-        <label>EdgeGlow Speed <input id="edgeSpeed" type="range" min="0" max="2" step="0.01" value="0.15" /></label>
+      <div class="row3" style="margin-top:6px">
+        <label>EdgeGlow Base <input id="edgeBase" type="range" min="0" max="2" step="0.01" value="0.7" /></label>
+        <label>EdgeGlow Amp  <input id="edgeAmp"  type="range" min="0" max="2" step="0.01" value="0.35" /></label>
+        <label>EdgeGlow Speed<input id="edgeSpeed"type="range" min="0" max="2" step="0.01" value="0.15" /></label>
       </div>
-
-      <div style="margin-top:6px" class="row3">
-        <label>Sectors Base <input id="secBase" type="range" min="3" max="24" step="1" value="10" /></label>
-        <label>Sectors Amp <input id="secAmp" type="range" min="0" max="10" step="1" value="3" /></label>
-        <label>Sectors Speed <input id="secSpeed" type="range" min="0" max="2" step="0.01" value="0.12" /></label>
-      </div>
-
-      <div class="muted" style="margin-top:8px">Tip: set <b>Auto Animate</b> to “off” to scrub bases live with the sliders.</div>
+      <div class="muted" style="margin-top:6px">Tip: set Auto=off to scrub textures with sliders.</div>
     </div>
   </div>
 
-  <script type="module" src="./main.js"></script>
+  <!-- IMPORTANT: version query busts caches on GitHub Pages -->
+  <script type="module" src="./main.js?v=7"></script>
   <noscript>This page needs JavaScript enabled.</noscript>
 </body>
 </html>
