@@ -1,11 +1,18 @@
 /**
- * Origami — 3 Presets (Paper-like, No File Loads)
+ * Psychedelic Origami — Simple Folds + Reflections (no external files)
  *
- * 1) Half Vertical (Valley)   — simple working fold
- * 2) Diagonal (Valley)        — simple working fold
- * 3) Flapping Bird            — built-in crease pattern using the same folding engine
+ * Presets (3):
+ *  - Half Vertical (Valley)
+ *  - Diagonal (Valley)
+ *  - Gate (2× Valley)
  *
- * Conventions: Valley = +°, Mountain = −° (Origami Simulator’s fold-angle sign).  See docs. 
+ * Global Animation:
+ *  - One slider controls the base speed for folds + shader.
+ *  - Each shader parameter has a "Speed Var" that multiplies around the global speed.
+ *
+ * Notes:
+ *  - Fold angle sign matches Origami Simulator (valley +°, mountain −°). [Design Tips]
+ *  - Dynamic reflections via CubeCamera (updated every frame). 
  */
 
 import * as THREE from 'three';
@@ -39,27 +46,43 @@ controls.enableDamping = true;
 // ---------- Post ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.3, 0.6, 0.2);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.6, 0.2);
 composer.addPass(bloom);
 const fxaa = new ShaderPass(FXAAShader);
 fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.innerHeight);
 composer.addPass(fxaa);
 composer.addPass(new OutputPass());
 
-// ---------- Paper sheet ----------
+// ---------- Background & Sheet ----------
 const SIZE = 3.0;
 const SEG = 160;
 const sheetGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
 sheetGeo.rotateX(-0.25);
 
+const background = new THREE.Mesh(
+  new THREE.SphereGeometry(50, 32, 32),
+  new THREE.MeshBasicMaterial({ color: 0x070711, side: THREE.BackSide })
+);
+scene.add(background);
+
+// ---------- Dynamic Reflection Setup ----------
+const cubeRT = new THREE.WebGLCubeRenderTarget(256, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+const cubeCam = new THREE.CubeCamera(0.1, 200, cubeRT);
+scene.add(cubeCam);
+
 // ---------- Math helpers ----------
-const tmp = { v: new THREE.Vector3(), u: new THREE.Vector3() };
+const tmp = { v: new THREE.Vector3() };
 function sdLine2(p, a, d){ const px=p.x-a.x, py=p.y-a.y; return d.x*py - d.y*px; }
 function rotPointAroundAxis(p, a, axisUnit, ang){ tmp.v.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a); p.copy(tmp.v); }
 function rotVecAxis(v, axisUnit, ang){ v.applyAxisAngle(axisUnit, ang); }
 function clamp01(x){ return x<0?0:x>1?1:x; }
+const Ease = {
+  linear: t => t,
+  smoothstep: t => t*t*(3-2*t),
+  easeInOutCubic: t => (t<0.5? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2)
+};
 
-// ---------- Crease engine with small mask budget ----------
+// ---------- Minimal crease engine with tiny mask budget ----------
 const MAX_CREASES = 6;
 const MAX_MASKS_PER = 2;
 const VALLEY = +1, MOUNTAIN = -1;
@@ -106,57 +129,40 @@ const eff = {
   mA: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
   mD: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0)))
 };
-const drive = { play:false, progress:0.7, speed:1.0 };
 
-function computeFrames(){
-  // start from base frames
-  for (let i=0;i<base.count;i++){
-    eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize();
-    eff.mCount[i] = base.mCount[i];
-    for (let m=0;m<MAX_MASKS_PER;m++){
-      eff.mA[i][m].copy(base.mA[i][m]); eff.mD[i][m].copy(base.mD[i][m]).normalize();
-    }
-  }
-  // sequential propagation of earlier folds
-  for (let j=0;j<base.count;j++){
-    const Aj = eff.A[j]; const Dj = eff.D[j].clone().normalize(); const ang = eff.ang[j]; if (Math.abs(ang)<1e-7) continue;
-    for (let k=j+1;k<base.count;k++){
-      const sd = sdLine2(eff.A[k], Aj, Dj);
-      if (sd > 0.0){
-        rotPointAroundAxis(eff.A[k], Aj, Dj, ang);
-        rotVecAxis(eff.D[k], Dj, ang); eff.D[k].normalize();
-        for (let m=0;m<MAX_MASKS_PER;m++){
-          const sdM = sdLine2(eff.mA[k][m], Aj, Dj);
-          if (sdM > 0.0){
-            rotPointAroundAxis(eff.mA[k][m], Aj, Dj, ang);
-            rotVecAxis(eff.mD[k][m], Dj, ang); eff.mD[k][m].normalize();
-          }
-        }
-      }
-    }
-  }
-}
+const drive = { play:false, progress:0.65, easing:'smoothstep', globalSpeed:1.0 };
 
-// ---------- Uniforms (folding + shader look) ----------
+// ---------- Uniforms ----------
 const uniforms = {
-  uTime:       { value: 0 },
-  uSectors:    { value: 10.0 },
-  uHueShift:   { value: 0.0 },
-  uIridescence:{ value: 0.65 },
-  uFilmIOR:    { value: 1.35 },
-  uFilmNm:     { value: 360.0 },
-  uFiber:      { value: 0.35 },
-  uEdgeGlow:   { value: 0.7 },
+  uTime:          { value: 0 },
+  uSectors:       { value: 10.0 },
+  uHueShift:      { value: 0.05 },
+  uIridescence:   { value: 0.65 },
+  uFilmIOR:       { value: 1.35 },
+  uFilmNm:        { value: 360.0 },
+  uFiber:         { value: 0.35 },
+  uEdgeGlow:      { value: 0.7 },
 
-  uCreaseCount: { value: 0 },
-  uAeff:  { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3()) },
-  uDeff:  { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3(1,0,0)) },
-  uAng:   { value: new Float32Array(MAX_CREASES) },
+  // reflections & lighting
+  uEnvMap:        { value: cubeRT.texture },
+  uReflectivity:  { value: 0.25 },
+  uSpecIntensity: { value: 0.7 },
+  uSpecPower:     { value: 24.0 },
+  uRimIntensity:  { value: 0.5 },
+  uLightDir:      { value: new THREE.Vector3(0.5, 1.0, 0.25).normalize() },
 
-  uMaskA: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3()) },
-  uMaskD: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3(1,0,0)) },
-  uMaskOn:{ value: new Float32Array(MAX_CREASES*MAX_MASKS_PER) }
+  // folding data
+  uCreaseCount:   { value: 0 },
+  uAeff:          { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3()) },
+  uDeff:          { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3(1,0,0)) },
+  uAng:           { value: new Float32Array(MAX_CREASES) },
+
+  // masks (flattened)
+  uMaskA:         { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3()) },
+  uMaskD:         { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3(1,0,0)) },
+  uMaskOn:        { value: new Float32Array(MAX_CREASES*MAX_MASKS_PER) }
 };
+
 function pushToUniforms(){
   uniforms.uCreaseCount.value = base.count;
   uniforms.uAeff.value = eff.A.map(v => v.clone());
@@ -177,7 +183,7 @@ function pushToUniforms(){
   uniforms.uMaskOn.value = Float32Array.from(on);
 }
 
-// ---------- Shaders (vertex = rigid hinges + masks; fragment = psychedelic paper) ----------
+// ---------- Shaders ----------
 const vs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
   #define MAX_MASKS_PER ${MAX_MASKS_PER}
@@ -187,7 +193,6 @@ const vs = /* glsl */`
   uniform vec3  uAeff[MAX_CREASES];
   uniform vec3  uDeff[MAX_CREASES];
   uniform float uAng[MAX_CREASES];
-
   uniform vec3  uMaskA[MAX_CREASES*MAX_MASKS_PER];
   uniform vec3  uMaskD[MAX_CREASES*MAX_MASKS_PER];
   uniform float uMaskOn[MAX_CREASES*MAX_MASKS_PER];
@@ -245,6 +250,12 @@ const fs = /* glsl */`
   uniform float uSectors, uHueShift;
   uniform float uIridescence, uFilmIOR, uFilmNm, uFiber, uEdgeGlow;
 
+  // reflections & lighting
+  uniform samplerCube uEnvMap;
+  uniform float uReflectivity;
+  uniform float uSpecIntensity, uSpecPower, uRimIntensity;
+  uniform vec3  uLightDir;
+
   uniform int   uCreaseCount;
   uniform vec3  uAeff[MAX_CREASES];
   uniform vec3  uDeff[MAX_CREASES];
@@ -277,7 +288,7 @@ const fs = /* glsl */`
   float sdLine(vec2 p, vec2 a, vec2 d){ return d.x*(p.y - a.y) - d.y*(p.x - a.x); }
 
   void main(){
-    // kaleidoscopic mapping
+    // Kaleidoscopic mapping (psychedelic base)
     float theta = atan(vPos.z, vPos.x);
     float r = length(vPos.xz) * 0.55;
     float seg = 2.0*PI / max(3.0, uSectors);
@@ -301,7 +312,7 @@ const fs = /* glsl */`
     float grain = fbm(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
-    // crease glow (helps read folds)
+    // crease glow (distance to nearest crease)
     float minD = 1e9;
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
@@ -313,22 +324,38 @@ const fs = /* glsl */`
     float aa = fwidth(minD);
     float edge = 1.0 - smoothstep(0.0025, 0.0025 + aa, minD);
 
-    // iridescence
+    // viewing terms
     vec3 V = normalize(cameraPosition - vPos);
     vec3 N = normalize(vN);
+
+    // thin-film iridescence (Schlick blend)
     float cosT = clamp(dot(N, V), 0.0, 1.0);
     vec3 film = thinFilm(cosT, uFilmIOR, uFilmNm);
     float F = pow(1.0 - cosT, 5.0);
     vec3 col = mix(baseCol, mix(baseCol, film, uIridescence), F);
 
+    // specular + rim highlights
+    vec3 L = normalize(uLightDir);
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), uSpecPower) * uSpecIntensity;
+    float rim  = pow(1.0 - max(dot(N, V), 0.0), 2.0) * uRimIntensity;
+    col += spec + rim;
+
+    // dynamic reflection (cube map)
+    vec3 R = reflect(-V, N);
+    vec3 env = textureCube(uEnvMap, R).rgb;
+    col = mix(col, env, clamp(uReflectivity, 0.0, 1.0));
+
+    // edge glow with thin-film tint
     col += uEdgeGlow * edge * film * 0.6;
 
+    // vignette
     float vign = smoothstep(1.2, 0.2, length(vUv-0.5)*1.2);
     gl_FragColor = vec4(col*vign, 1.0);
   }
 `;
 
-// Material + sheet
+// ---------- Material + Mesh ----------
 const mat = new THREE.ShaderMaterial({
   vertexShader: vs, fragmentShader: fs, uniforms,
   side: THREE.DoubleSide, extensions: { derivatives: true }
@@ -336,24 +363,14 @@ const mat = new THREE.ShaderMaterial({
 const sheet = new THREE.Mesh(sheetGeo, mat);
 scene.add(sheet);
 
-// Background dome
-scene.add(new THREE.Mesh(
-  new THREE.SphereGeometry(50, 32, 32),
-  new THREE.MeshBasicMaterial({ color: 0x070711, side: THREE.BackSide })
-));
-
-// ---------- GUI (optional) ----------
+// ---------- GUI (optional visual tuning) ----------
 const gui = new GUI();
 const looks = gui.addFolder('Look');
 looks.add(uniforms.uSectors, 'value', 3, 24, 1).name('kaleidoSectors');
 looks.add(uniforms.uHueShift, 'value', 0, 1, 0.001).name('hueShift');
 looks.add(uniforms.uIridescence, 'value', 0, 1, 0.001).name('iridescence');
 looks.add(uniforms.uFilmIOR, 'value', 1.0, 2.333, 0.001).name('filmIOR');
-looks.add(uniforms.uFilmNm, 'value', 100, 800, 1).name('filmThickness(nm)');
 looks.add(uniforms.uFiber, 'value', 0, 1, 0.001).name('paperFiber');
-looks.add(uniforms.uEdgeGlow, 'value', 0.0, 2.0, 0.01).name('edgeGlow');
-looks.add(bloom, 'strength', 0.0, 2.5, 0.01).name('bloomStrength');
-looks.add(bloom, 'radius', 0.0, 1.5, 0.01).name('bloomRadius');
 looks.close();
 
 // ---------- Presets ----------
@@ -365,81 +382,49 @@ function preset_diagonal_valley(){
   resetBase();
   addCrease({ Ax:0, Ay:0, Dx:1, Dy:1, deg:180, sign:VALLEY });
 }
-
-// Flapping Bird (built-in) — minimal crease set + masks to isolate wing regions
-const bird = { iCenter:-1, iLeft:-1, iRight:-1, ampDeg:55, baseDeg:10, speed:1.2 };
-
-function preset_flapping_bird(){
+function preset_gate_valley(){
   resetBase();
-
-  // 0) Center body fold (valley): vertical line through origin
-  addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:140, sign:VALLEY });
-  bird.iCenter = 0;
-
-  // Masks utility
-  const topHalf = { Ax:0, Ay:0, Dx:1, Dy:0 };     // sd > 0 => y > 0
-  const leftHalf= { Ax:0, Ay:0, Dx:0, Dy:1 };     // sd > 0 => x < 0
-  const rightHalf={ Ax:0, Ay:0, Dx:0, Dy:-1 };    // sd > 0 => x > 0
-
-  // 1) Left wing hinge: a vertical line slightly left of center, only top-left quadrant
-  addCrease({
-    Ax:-0.10, Ay:0.14, Dx:0, Dy:1, deg:80, sign:VALLEY,
-    masks:[ topHalf, leftHalf ]
-  });
-  bird.iLeft = 1;
-
-  // 2) Right wing hinge: mirror; use Mountain sign to mirror rotation
-  addCrease({
-    Ax:+0.10, Ay:0.14, Dx:0, Dy:1, deg:80, sign:MOUNTAIN,
-    masks:[ topHalf, rightHalf ]
-  });
-  bird.iRight = 2;
-
-  // (Optional future: small head/tail creases could be added within the budget)
+  const x = SIZE*0.25;
+  addCrease({ Ax:+x, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
+  addCrease({ Ax:-x, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
 }
 
 // ---------- DOM wiring ----------
 const presetSel   = document.getElementById('preset');
 const btnApply    = document.getElementById('btnApply');
 const btnPlay     = document.getElementById('btnPlay');
+const btnReset    = document.getElementById('btnReset');
+const progress    = document.getElementById('progress');
+const easingSel   = document.getElementById('easing');
 const btnSnap     = document.getElementById('btnSnap');
-const progressEl  = document.getElementById('progress');
 
-const wingAmp     = document.getElementById('wingAmp');
-const wingSpeed   = document.getElementById('wingSpeed');
-const wingBase    = document.getElementById('wingBase');
+// global + shader anim controls
+const shaderAuto  = document.getElementById('shaderAuto');
+const globalSpeed = document.getElementById('globalSpeed');
 
-const shaderAuto = document.getElementById('shaderAuto');
-const shaderGlobalSpeed = document.getElementById('shaderGlobalSpeed');
-const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueSpeed = document.getElementById('hueSpeed');
-const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmSpeed = document.getElementById('filmSpeed');
-const edgeBase = document.getElementById('edgeBase'), edgeAmp = document.getElementById('edgeAmp'), edgeSpeed = document.getElementById('edgeSpeed');
+const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueVar = document.getElementById('hueVar');
+const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmVar = document.getElementById('filmVar');
+const edgeBase = document.getElementById('edgeBase'), edgeAmp = document.getElementById('edgeAmp'), edgeVar = document.getElementById('edgeVar');
+const reflBase = document.getElementById('reflBase'), reflAmp = document.getElementById('reflAmp'), reflVar = document.getElementById('reflVar');
 
-let currentPreset = 'half-vertical-valley';
+const specInt = document.getElementById('specInt'), specPow = document.getElementById('specPow'), rimInt = document.getElementById('rimInt');
+const bloomStr = document.getElementById('bloomStr'), bloomRad = document.getElementById('bloomRad');
 
 btnApply.onclick = () => {
-  currentPreset = presetSel.value;
+  const v = presetSel.value;
+  if (v==='half-vertical-valley') preset_half_vertical_valley();
+  else if (v==='diagonal-valley') preset_diagonal_valley();
+  else if (v==='gate-valley') preset_gate_valley();
 
-  if (currentPreset === 'flapping-bird'){
-    preset_flapping_bird();
-    // ensure reasonable wing params from UI
-    bird.ampDeg = parseFloat(wingAmp.value);
-    bird.speed  = parseFloat(wingSpeed.value);
-    bird.baseDeg= parseFloat(wingBase.value);
-  } else if (currentPreset === 'half-vertical-valley'){
-    preset_half_vertical_valley();
-  } else if (currentPreset === 'diagonal-valley'){
-    preset_diagonal_valley();
-  }
-
-  // small camera nudge for visual feedback
   camera.position.x += (Math.random()-0.5) * 0.02;
   camera.position.y += (Math.random()-0.5) * 0.02;
 };
-
 presetSel.addEventListener('change', () => btnApply.click());
 
 btnPlay.onclick = () => { drive.play = !drive.play; btnPlay.textContent = drive.play ? 'Pause' : 'Play'; };
+btnReset.onclick = () => { drive.play=false; btnPlay.textContent='Play'; drive.progress=0; progress.value='0'; };
+progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
+easingSel.addEventListener('change', () => { drive.easing = easingSel.value; });
 
 btnSnap.onclick = () => {
   renderer.domElement.toBlob((blob) => {
@@ -451,64 +436,115 @@ btnSnap.onclick = () => {
   }, 'image/png', 1.0);
 };
 
-progressEl.addEventListener('input', () => { drive.progress = parseFloat(progressEl.value); });
-wingAmp.addEventListener('input',   () => bird.ampDeg  = parseFloat(wingAmp.value));
-wingSpeed.addEventListener('input', () => bird.speed   = parseFloat(wingSpeed.value));
-wingBase.addEventListener('input',  () => bird.baseDeg = parseFloat(wingBase.value));
+// Surface + bloom
+specInt.addEventListener('input', () => uniforms.uSpecIntensity.value = parseFloat(specInt.value));
+specPow.addEventListener('input', () => uniforms.uSpecPower.value     = parseFloat(specPow.value));
+rimInt .addEventListener('input', () => uniforms.uRimIntensity.value  = parseFloat(rimInt.value));
 
-// ---------- Shader Animation (texture look) ----------
+bloomStr.addEventListener('input', () => bloom.strength = parseFloat(bloomStr.value));
+bloomRad.addEventListener('input', () => bloom.radius   = parseFloat(bloomRad.value));
+
+// ---------- Shader Animation (global + per-parameter speed variation) ----------
 function updateShaderAnim(t){
   const auto = shaderAuto.value === 'on';
-  const gs = parseFloat(shaderGlobalSpeed.value);
+  drive.globalSpeed = parseFloat(globalSpeed.value);
 
-  const HB = parseFloat(hueBase.value),  HA = parseFloat(hueAmp.value),  HS = parseFloat(hueSpeed.value);
-  const FB = parseFloat(filmBase.value), FA = parseFloat(filmAmp.value), FS = parseFloat(filmSpeed.value);
-  const EB = parseFloat(edgeBase.value), EA = parseFloat(edgeAmp.value), ES = parseFloat(edgeSpeed.value);
+  const g = drive.globalSpeed;
 
-  uniforms.uHueShift.value = THREE.MathUtils.clamp(HB + (auto? HA*Math.sin((HS+gs)*t) : 0), 0, 1);
-  uniforms.uFilmNm.value   = THREE.MathUtils.clamp(FB + (auto? FA*Math.sin((FS+0.15*gs)*t+0.7) : 0), 100, 800);
-  uniforms.uEdgeGlow.value = THREE.MathUtils.clamp(EB + (auto? EA*Math.sin((ES+0.25*gs)*t+2.1) : 0), 0.0, 2.0);
-}
+  const HB = parseFloat(hueBase.value),  HA = parseFloat(hueAmp.value),  HV = parseFloat(hueVar.value);
+  const FB = parseFloat(filmBase.value), FA = parseFloat(filmAmp.value), FV = parseFloat(filmVar.value);
+  const EB = parseFloat(edgeBase.value), EA = parseFloat(edgeAmp.value), EV = parseFloat(edgeVar.value);
+  const RB = parseFloat(reflBase.value), RA = parseFloat(reflAmp.value), RV = parseFloat(reflVar.value);
 
-// ---------- Angle driver ----------
-function computeAngles(tSec){
-  // default: simple folds share one parameter
-  let t = drive.play ? (0.5 + 0.5*Math.sin(tSec*drive.speed)) : drive.progress;
-  for (let i=0;i<base.count;i++){ eff.ang[i] = base.sign[i] * base.amp[i] * clamp01(t); }
+  const hueW  = g * (1.0 + HV);
+  const filmW = g * (1.0 + FV);
+  const edgeW = g * (1.0 + EV);
+  const reflW = g * (1.0 + RV);
 
-  if (currentPreset === 'flapping-bird'){
-    // Center body fold: mostly closed; keep it steady for clarity
-    const centerDeg = 140;
-    eff.ang[bird.iCenter] = VALLEY * THREE.MathUtils.degToRad(centerDeg);
-
-    // Wing flapping: animated when Play, else scrub via Progress (mapped to [-1, +1])
-    const phase = drive.play ? Math.sin(tSec * bird.speed) : (drive.progress*2 - 1);
-    const wingDeg = bird.baseDeg + bird.ampDeg * phase;
-
-    // Left wing: valley (+), Right wing: mountain (−) — mirror motion
-    eff.ang[bird.iLeft]  =  VALLEY   * THREE.MathUtils.degToRad(wingDeg);
-    eff.ang[bird.iRight] =  MOUNTAIN * THREE.MathUtils.degToRad(wingDeg);
+  if (auto){
+    uniforms.uHueShift.value     = THREE.MathUtils.clamp(HB + HA*Math.sin(t*hueW + 0.00), 0, 1);
+    uniforms.uFilmNm.value       = THREE.MathUtils.clamp(FB + FA*Math.sin(t*filmW + 0.65), 100, 800);
+    uniforms.uEdgeGlow.value     = THREE.MathUtils.clamp(EB + EA*Math.sin(t*edgeW + 1.30), 0.0, 2.0);
+    uniforms.uReflectivity.value = THREE.MathUtils.clamp(RB + RA*Math.sin(t*reflW + 2.10), 0.0, 1.0);
+  } else {
+    uniforms.uHueShift.value     = HB;
+    uniforms.uFilmNm.value       = FB;
+    uniforms.uEdgeGlow.value     = EB;
+    uniforms.uReflectivity.value = RB;
   }
 }
 
-// ---------- Start ----------
-function start(){
-  presetSel.value = 'flapping-bird'; // start with the bird so you can see the animation
-  btnApply.click();
-  progressEl.value = String(drive.progress);
+// ---------- Folding solver (angle + frames) ----------
+function computeAngles(tSec){
+  const E = Ease[drive.easing] || Ease.linear;
+  const g = drive.globalSpeed;
+  const animT = drive.play ? (0.5 + 0.5*Math.sin(tSec * g)) : drive.progress;
+
+  for (let i=0;i<base.count;i++){
+    eff.ang[i] = base.sign[i] * base.amp[i] * E(clamp01(animT));
+    eff.mCount[i] = base.mCount[i];
+    for (let m=0;m<MAX_MASKS_PER;m++){
+      eff.mA[i][m].copy(base.mA[i][m]);
+      eff.mD[i][m].copy(base.mD[i][m]);
+    }
+  }
+  for (let i=base.count;i<MAX_CREASES;i++){ eff.ang[i]=0; eff.mCount[i]=0; }
 }
-start();
+
+function computeFrames(){
+  // start from base frames
+  for (let i=0;i<base.count;i++){
+    eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize();
+  }
+  // sequential propagation of earlier folds
+  for (let j=0;j<base.count;j++){
+    const Aj = eff.A[j]; const Dj = eff.D[j].clone().normalize(); const ang = eff.ang[j]; if (Math.abs(ang)<1e-7) continue;
+    for (let k=j+1;k<base.count;k++){
+      const sd = sdLine2(eff.A[k], Aj, Dj);
+      if (sd > 0.0){
+        rotPointAroundAxis(eff.A[k], Aj, Dj, ang);
+        rotVecAxis(eff.D[k], Dj, ang); eff.D[k].normalize();
+        for (let m=0;m<MAX_MASKS_PER;m++){
+          const sdM = sdLine2(eff.mA[k][m], Aj, Dj);
+          if (sdM > 0.0){
+            rotPointAroundAxis(eff.mA[k][m], Aj, Dj, ang);
+            rotVecAxis(eff.mD[k][m], Dj, ang); eff.mD[k][m].normalize();
+          }
+        }
+      }
+    }
+  }
+}
+
+function pushAll(){
+  pushToUniforms();
+}
+
+// ---------- Start ----------
+presetSel.value = 'half-vertical-valley';
+btnApply.click();
+progress.value = String(drive.progress);
 
 // ---------- Frame loop ----------
 function tick(tMs){
   const t = tMs * 0.001;
   uniforms.uTime.value = t;
 
+  // Fold kinematics
   computeAngles(t);
   computeFrames();
-  pushToUniforms();
+  pushAll();
+
+  // Surface animation
   updateShaderAnim(t);
 
+  // Update reflections (hide the sheet while capturing)
+  sheet.visible = false;
+  cubeCam.position.copy(sheet.position);
+  cubeCam.update(renderer, scene);
+  sheet.visible = true;
+
+  // Render
   controls.update();
   composer.render();
   requestAnimationFrame(tick);
