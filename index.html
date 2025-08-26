@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Origami — 3 Presets (Paper-like, No File Loads)</title>
+  <title>Psychedelic Origami — Simple Folds + Reflections</title>
   <meta name="theme-color" content="#050509" />
   <style>
     html, body { height: 100%; margin: 0; background: #050509; }
@@ -17,7 +17,7 @@
 
     .hud {
       position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 10;
-      display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e7f2ff;
     }
     .panel { background: #10131a; border: 1px solid #2a3244; border-radius: 8px; padding: 10px; }
@@ -33,10 +33,10 @@
     .muted { opacity: 0.85; }
   </style>
 
-  <!-- Polyfill so import maps work everywhere modern -->
+  <!-- ESM polyfill so import maps work everywhere modern -->
   <script async src="https://unpkg.com/es-module-shims@2.6.2/dist/es-module-shims.js"></script>
 
-  <!-- Import map: three.js + lil-gui -->
+  <!-- Import map: three.js + lil-gui (optional) -->
   <script type="importmap">
   {
     "imports": {
@@ -49,77 +49,100 @@
 </head>
 <body>
   <div id="app"></div>
-  <div class="brand">Origami — drag to orbit, wheel to zoom</div>
+  <div class="brand">Psychedelic Origami — drag to orbit, wheel to zoom</div>
 
   <div class="hud">
-    <!-- Models (exactly 3) -->
+    <!-- Folding controls -->
     <div class="panel">
-      <h3>Models</h3>
+      <h3>Folding</h3>
       <div class="row">
         <select id="preset">
           <option value="half-vertical-valley">Half Vertical (Valley)</option>
           <option value="diagonal-valley">Diagonal (Valley)</option>
-          <option value="flapping-bird">Flapping Bird (paper folds)</option>
+          <option value="gate-valley">Gate (2× Valley)</option>
         </select>
         <button id="btnApply">Apply</button>
       </div>
-
       <div class="row2" style="margin-top:8px">
-        <label>Fold / Flap Progress
-          <input id="progress" type="range" min="0" max="1" step="0.001" value="0.7" />
-        </label>
-        <div class="row" style="gap:6px">
-          <button id="btnPlay">Play</button>
-          <button id="btnSnap">Save PNG</button>
-        </div>
-      </div>
-
-      <!-- Bird-only controls (ignored for simple folds) -->
-      <div class="row3" style="margin-top:8px">
-        <label>Wing Amp (°) <input id="wingAmp"   type="range" min="0"   max="90" step="1" value="55" /></label>
-        <label>Wing Speed   <input id="wingSpeed" type="range" min="0"   max="3"  step="0.01" value="1.2" /></label>
-        <label>Wing Base (°)<input id="wingBase"  type="range" min="-30" max="30" step="1" value="10" /></label>
-      </div>
-      <div class="muted" style="margin-top:4px">
-        Tip: In “Flapping Bird”, <b>Play</b> animates wings. When paused, the <b>Progress</b> slider scrubs the wing pose.
-      </div>
-    </div>
-
-    <!-- Shader animation sliders (texture look) -->
-    <div class="panel">
-      <h3>Shader Animation</h3>
-      <div class="row2">
-        <label>Auto Animate
-          <select id="shaderAuto">
-            <option value="off">off</option>
-            <option value="on" selected>on</option>
+        <label>Progress <input id="progress" type="range" min="0" max="1" step="0.001" value="0.65" /></label>
+        <label>Easing
+          <select id="easing">
+            <option value="linear">linear</option>
+            <option value="smoothstep" selected>smoothstep</option>
+            <option value="easeInOutCubic">easeInOutCubic</option>
           </select>
         </label>
-        <label>Global Speed <input id="shaderGlobalSpeed" type="range" min="0" max="2" step="0.01" value="0.25" /></label>
       </div>
+      <div class="row2" style="margin-top:8px">
+        <div class="row" style="gap:6px">
+          <button id="btnPlay">Play</button>
+          <button id="btnReset">Reset</button>
+        </div>
+        <button id="btnSnap">Save PNG</button>
+      </div>
+      <div class="muted" style="margin-top:6px">Play animates the fold; Progress scrubs when paused.</div>
+    </div>
 
-      <div class="row3" style="margin-top:6px">
-        <label>Hue Base  <input id="hueBase"  type="range" min="0" max="1" step="0.001" value="0.0" /></label>
+    <!-- Global animation (affects folds + shader) -->
+    <div class="panel">
+      <h3>Global Animation</h3>
+      <div class="row">
+        <label>Global Speed <input id="globalSpeed" type="range" min="0" max="3" step="0.01" value="1.0" /></label>
+        <select id="shaderAuto">
+          <option value="off">Auto: off</option>
+          <option value="on" selected>Auto: on</option>
+        </select>
+      </div>
+      <div class="muted">Global Speed multiplies <b>all</b> animation rates. Per‑parameter sliders below control <b>speed variation</b>.</div>
+    </div>
+
+    <!-- Shader animation controls (speed variation) -->
+    <div class="panel">
+      <h3>Shader Animation (speed variation)</h3>
+
+      <div class="row3">
+        <label>Hue Base  <input id="hueBase"  type="range" min="0" max="1" step="0.001" value="0.05" /></label>
         <label>Hue Amp   <input id="hueAmp"   type="range" min="0" max="1" step="0.001" value="0.25" /></label>
-        <label>Hue Speed <input id="hueSpeed" type="range" min="0" max="2" step="0.01" value="0.3" /></label>
+        <label>Hue Speed Var <input id="hueVar" type="range" min="0" max="2" step="0.01" value="0.35" /></label>
       </div>
 
       <div class="row3" style="margin-top:6px">
         <label>Film nm Base  <input id="filmBase"  type="range" min="100" max="800" step="1" value="360" /></label>
         <label>Film nm Amp   <input id="filmAmp"   type="range" min="0"   max="300" step="1" value="140" /></label>
-        <label>Film nm Speed <input id="filmSpeed" type="range" min="0"   max="2"   step="0.01" value="0.15" /></label>
+        <label>Film Speed Var<input id="filmVar"   type="range" min="0"   max="2"   step="0.01" value="0.25" /></label>
       </div>
 
       <div class="row3" style="margin-top:6px">
         <label>EdgeGlow Base  <input id="edgeBase"  type="range" min="0" max="2" step="0.01" value="0.7" /></label>
         <label>EdgeGlow Amp   <input id="edgeAmp"   type="range" min="0" max="2" step="0.01" value="0.35" /></label>
-        <label>EdgeGlow Speed <input id="edgeSpeed" type="range" min="0" max="2" step="0.01" value="0.15" /></label>
+        <label>Edge Speed Var <input id="edgeVar"   type="range" min="0" max="2" step="0.01" value="0.22" /></label>
+      </div>
+
+      <div class="row3" style="margin-top:6px">
+        <label>Reflect Base   <input id="reflBase"  type="range" min="0" max="1" step="0.01" value="0.25" /></label>
+        <label>Reflect Amp    <input id="reflAmp"   type="range" min="0" max="1" step="0.01" value="0.25" /></label>
+        <label>Reflect Speed Var <input id="reflVar"type="range" min="0" max="2" step="0.01" value="0.18" /></label>
+      </div>
+    </div>
+
+    <!-- Surface controls -->
+    <div class="panel">
+      <h3>Surface (Reflections & Highlights)</h3>
+      <div class="row3">
+        <label>Spec Intensity <input id="specInt" type="range" min="0" max="2" step="0.01" value="0.7" /></label>
+        <label>Spec Power     <input id="specPow" type="range" min="1" max="64" step="1" value="24" /></label>
+        <label>Rim Intensity  <input id="rimInt"  type="range" min="0" max="2" step="0.01" value="0.5" /></label>
+      </div>
+      <div class="row3" style="margin-top:6px">
+        <label>Bloom Strength <input id="bloomStr" type="range" min="0" max="2.5" step="0.01" value="0.35" /></label>
+        <label>Bloom Radius   <input id="bloomRad" type="range" min="0" max="1.5" step="0.01" value="0.6" /></label>
+        <span></span>
       </div>
     </div>
   </div>
 
   <!-- IMPORTANT: version query helps bust caches on GitHub Pages -->
-  <script type="module" src="./main.js?v=2"></script>
+  <script type="module" src="./main.js?v=3"></script>
   <noscript>This page needs JavaScript enabled.</noscript>
 </body>
 </html>
