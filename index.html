@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Origami — 3 Presets (No File Loads)</title>
+  <title>Origami — 3 Presets (Paper-like, No File Loads)</title>
   <meta name="theme-color" content="#050509" />
   <style>
     html, body { height: 100%; margin: 0; background: #050509; }
@@ -59,7 +59,7 @@
         <select id="preset">
           <option value="half-vertical-valley">Half Vertical (Valley)</option>
           <option value="diagonal-valley">Diagonal (Valley)</option>
-          <option value="flapping-bird">Flapping Bird (built-in)</option>
+          <option value="flapping-bird">Flapping Bird (paper folds)</option>
         </select>
         <button id="btnApply">Apply</button>
       </div>
@@ -74,11 +74,11 @@
         </div>
       </div>
 
-      <!-- Bird-only controls (ignored for folds) -->
+      <!-- Bird-only controls (ignored for simple folds) -->
       <div class="row3" style="margin-top:8px">
-        <label>Wing Amp <input id="wingAmp" type="range" min="0" max="1.2" step="0.01" value="0.6" /></label>
-        <label>Wing Speed <input id="wingSpeed" type="range" min="0" max="3" step="0.01" value="1.2" /></label>
-        <label>Wing Base <input id="wingBase" type="range" min="-0.6" max="0.6" step="0.01" value="0.2" /></label>
+        <label>Wing Amp (°) <input id="wingAmp"   type="range" min="0"   max="90" step="1" value="55" /></label>
+        <label>Wing Speed   <input id="wingSpeed" type="range" min="0"   max="3"  step="0.01" value="1.2" /></label>
+        <label>Wing Base (°)<input id="wingBase"  type="range" min="-30" max="30" step="1" value="10" /></label>
       </div>
       <div class="muted" style="margin-top:4px">
         Tip: In “Flapping Bird”, <b>Play</b> animates wings. When paused, the <b>Progress</b> slider scrubs the wing pose.
@@ -99,27 +99,27 @@
       </div>
 
       <div class="row3" style="margin-top:6px">
-        <label>Hue Base <input id="hueBase" type="range" min="0" max="1" step="0.001" value="0.0" /></label>
-        <label>Hue Amp  <input id="hueAmp"  type="range" min="0" max="1" step="0.001" value="0.25" /></label>
-        <label>Hue Speed<input id="hueSpeed"type="range" min="0" max="2" step="0.01" value="0.3" /></label>
+        <label>Hue Base  <input id="hueBase"  type="range" min="0" max="1" step="0.001" value="0.0" /></label>
+        <label>Hue Amp   <input id="hueAmp"   type="range" min="0" max="1" step="0.001" value="0.25" /></label>
+        <label>Hue Speed <input id="hueSpeed" type="range" min="0" max="2" step="0.01" value="0.3" /></label>
       </div>
 
       <div class="row3" style="margin-top:6px">
-        <label>Film nm Base <input id="filmBase" type="range" min="100" max="800" step="1" value="360" /></label>
-        <label>Film nm Amp  <input id="filmAmp"  type="range" min="0" max="300" step="1" value="140" /></label>
-        <label>Film nm Speed<input id="filmSpeed"type="range" min="0" max="2" step="0.01" value="0.15" /></label>
+        <label>Film nm Base  <input id="filmBase"  type="range" min="100" max="800" step="1" value="360" /></label>
+        <label>Film nm Amp   <input id="filmAmp"   type="range" min="0"   max="300" step="1" value="140" /></label>
+        <label>Film nm Speed <input id="filmSpeed" type="range" min="0"   max="2"   step="0.01" value="0.15" /></label>
       </div>
 
       <div class="row3" style="margin-top:6px">
-        <label>EdgeGlow Base <input id="edgeBase" type="range" min="0" max="2" step="0.01" value="0.7" /></label>
-        <label>EdgeGlow Amp  <input id="edgeAmp"  type="range" min="0" max="2" step="0.01" value="0.35" /></label>
-        <label>EdgeGlow Speed<input id="edgeSpeed"type="range" min="0" max="2" step="0.01" value="0.15" /></label>
+        <label>EdgeGlow Base  <input id="edgeBase"  type="range" min="0" max="2" step="0.01" value="0.7" /></label>
+        <label>EdgeGlow Amp   <input id="edgeAmp"   type="range" min="0" max="2" step="0.01" value="0.35" /></label>
+        <label>EdgeGlow Speed <input id="edgeSpeed" type="range" min="0" max="2" step="0.01" value="0.15" /></label>
       </div>
     </div>
   </div>
 
   <!-- IMPORTANT: version query helps bust caches on GitHub Pages -->
-  <script type="module" src="./main.js?v=1"></script>
+  <script type="module" src="./main.js?v=2"></script>
   <noscript>This page needs JavaScript enabled.</noscript>
 </body>
 </html>
