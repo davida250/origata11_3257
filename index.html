@@ -52,7 +52,7 @@
     .card{border:1px solid var(--stroke);border-radius:10px;padding:10px;background:#0f1219;}
     .card h4{margin:0 0 8px;color:var(--accent);font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
 
-    /* Two-row control block: (Amount) and (Speed). Robust grid prevents overlap. */
+    /* Robust control grid: (label · slider · number), any number of rows */
     .pair{
       display:grid;
       grid-template-columns:90px 1fr 64px;
@@ -87,7 +87,7 @@
     <select id="preset" aria-label="Preset">
       <option value="half-vertical-valley">Half Vertical</option>
       <option value="diagonal-valley">Diagonal</option>
-      <option value="gate-valley">Gate</option>
+      <option value="gate-valley">Gate (2× Valley)</option>
     </select>
 
     <div class="tool range" aria-label="Folding progress">
@@ -105,7 +105,7 @@
     <label class="check" for="autoFx"><input id="autoFx" type="checkbox" checked /> Auto FX</label>
 
     <button id="btnMore" class="btn-icon" aria-label="Advanced controls" aria-expanded="false" aria-controls="drawer">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.94-3.5a.75.75 0 0 1 .06 1.5l-2.11.16a7.99 7.99 0 0 1-.88 2.12l1.33 1.68a.75.75 0 1 1-1.18.94l-1.52-1.51a8.03 8.03 0 0 1-2.14.88l-.15 2.11a.75.75 0 0 1-1.5.06l-.16-2.11a7.99 7.99 0 0 1-2.12-.88l-1.68 1.33a.75.75 0 1 1-.94 1.18l-1.51-1.52c.42.63.7 1.35.88 2.12l2.11.15Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.94-3.5a.75.75 0 0 1 .06 1.5l-2.11.16a7.99 7.99 0 0 1-.88 2.12l1.33 1.68a.75.75 0 1 1-1.18.94l-1.52-1.51a8.03 8.03 0 0 1-2.14.88l-.15 2.11a.75.75 0 0 1-1.5.06l-.16-2.11a7.99 7.99 0 0 1-2.12-.88l-1.68 1.33a.75.75 0 1 1-.94-1.18l-1.51 1.52c.42.63.7 1.35.88 2.12l2.11.15Z"/></svg>
     </button>
 
     <button id="btnSnap" class="btn-icon" aria-label="Save PNG">
@@ -130,16 +130,16 @@
         </div>
       </div>
 
-      <!-- NEW: Texture selection + Amount/Speed -->
+      <!-- NEW: Texture type + Amount + Speed + Scale -->
       <div class="card">
         <h4>Texture</h4>
         <div class="pair">
           <label for="texMode">Type</label>
           <select id="texMode">
             <option value="0">Psychedelic</option>
-            <option value="1">Rice Paper</option>
-            <option value="2">Marble</option>
-            <option value="3">Stripes</option>
+            <option value="1">Perlin</option>
+            <option value="2">Fractal (fBm)</option>
+            <option value="3">Ridged</option>
           </select>
           <output aria-hidden="true"> </output>
 
@@ -150,6 +150,10 @@
           <label for="texSpeed">Speed</label>
           <input id="texSpeed" type="range" min="0" max="2" step="0.01" value="0.60" />
           <output id="texSpeedOut" for="texSpeed">0.60</output>
+
+          <label for="texScale">Scale</label>
+          <input id="texScale" type="range" min="0.25" max="8" step="0.01" value="1.00" />
+          <output id="texScaleOut" for="texScale">1.00</output>
         </div>
       </div>
 
@@ -261,7 +265,7 @@
   </details>
 
   <!-- Cache-bust on Pages with ?v= -->
-  <script type="module" src="./main.js?v=13"></script>
+  <script type="module" src="./main.js?v=14"></script>
   <noscript>This page needs JavaScript enabled.</noscript>
 </body>
 </html>
