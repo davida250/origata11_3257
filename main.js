@@ -1,9 +1,14 @@
 /**
- * Origami — 3 Working Models (Crane + 2 basics)
- * - Ultra-low uniforms to avoid WebGL failures (MAX_CREASES=4; no masks)
- * - Shader look preserved (iridescent thin film + fibers + bloom toned down)
- * - Texture animation sliders (Hue, Film nm, EdgeGlow)
- * - Crane loader for MIT FOLD exports (faces+verts or CP); valley=+°, mountain=−°. 
+ * Origami — 3 Presets (No File Loads)
+ *
+ * 1) Half Vertical (Valley)   — simple working fold
+ * 2) Diagonal (Valley)        — simple working fold
+ * 3) Flapping Bird (built-in) — embedded low-poly origami-style bird with animated wings
+ *
+ * Notes:
+ * - The fold engine uses a tiny uniform budget (MAX_CREASES=2), so it renders reliably everywhere.
+ * - Valley = +°, Mountain = −° (same sign convention as Origami Simulator’s FOLD docs). 
+ *   See: "fold angle is positive for valley folds, negative for mountain folds".  [origamisimulator.org → Design Tips] 
  */
 
 import * as THREE from 'three';
@@ -15,7 +20,6 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import GUI from 'lil-gui';
-import earcut from 'earcut';
 
 // ---------- Renderer / Scene ----------
 const app = document.getElementById('app');
@@ -38,14 +42,14 @@ controls.enableDamping = true;
 // ---------- Post ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.3, 0.6, 0.2); // conservative default
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.3, 0.6, 0.2);
 composer.addPass(bloom);
 const fxaa = new ShaderPass(FXAAShader);
-fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.innerHeight);
+fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.height || 1 / window.innerHeight);
 composer.addPass(fxaa);
 composer.addPass(new OutputPass());
 
-// ---------- Paper geometry (square) ----------
+// ---------- Paper sheet for fold presets ----------
 const SIZE = 3.0;
 const SEG = 160;
 const sheetGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
@@ -58,8 +62,8 @@ function rotPointAroundAxis(p, a, axisUnit, ang){ tmp.v.copy(p).sub(a).applyAxis
 function rotVecAxis(v, axisUnit, ang){ v.applyAxisAngle(axisUnit, ang); }
 function clamp01(x){ return x<0?0:x>1?1:x; }
 
-// ---------- Simple crease engine (no masks) ----------
-const MAX_CREASES = 4; // stays under uniform limits everywhere
+// ---------- Minimal crease engine ----------
+const MAX_CREASES = 2;
 const VALLEY = +1, MOUNTAIN = -1;
 
 const base = {
@@ -67,7 +71,7 @@ const base = {
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
   amp:  new Array(MAX_CREASES).fill(0),   // |angle| in radians
-  sign: new Array(MAX_CREASES).fill(1),   // +1 valley, -1 mountain
+  sign: new Array(MAX_CREASES).fill(1)    // +1 valley, -1 mountain
 };
 function resetBase(){
   base.count=0;
@@ -85,7 +89,6 @@ function addCrease({ Ax=0, Ay=0, Dx=1, Dy=0, deg=180, sign=VALLEY }){
   base.sign[i] = sign >= 0 ? VALLEY : MOUNTAIN;
 }
 
-// effective frames (for later creases moving with the paper)
 const eff = {
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
@@ -111,7 +114,7 @@ function computeFrames(){
   }
 }
 
-// ---------- Uniforms (small footprint) ----------
+// ---------- Uniforms + Shaders ----------
 const uniforms = {
   uTime:       { value: 0 },
   uSectors:    { value: 10.0 },
@@ -135,7 +138,6 @@ function pushToUniforms(){
   mat.uniformsNeedUpdate = true;
 }
 
-// ---------- Shaders (vertex = rigid hinges; fragment = psychedelic paper) ----------
 const vs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
   precision highp float;
@@ -243,7 +245,7 @@ const fs = /* glsl */`
     float grain = fbm(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
-    // crease glow
+    // crease glow (affects folds; harmless for bird)
     float minD = 1e9;
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
@@ -270,140 +272,23 @@ const fs = /* glsl */`
   }
 `;
 
-// ---------- Materials & meshes ----------
+// Material shared by sheet and bird (keeps the look unified)
 const mat = new THREE.ShaderMaterial({
   vertexShader: vs, fragmentShader: fs, uniforms,
   side: THREE.DoubleSide, extensions: { derivatives: true }
 });
+
+// Paper sheet mesh
 const sheet = new THREE.Mesh(sheetGeo, mat);
 scene.add(sheet);
 
+// Background dome
 scene.add(new THREE.Mesh(
   new THREE.SphereGeometry(50, 32, 32),
   new THREE.MeshBasicMaterial({ color: 0x070711, side: THREE.BackSide })
 ));
 
-// ---------- Presets (exactly 2 folds + Crane loader) ----------
-function preset_half_vertical_valley(){
-  resetBase();
-  addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
-}
-function preset_diagonal_valley(){
-  resetBase();
-  addCrease({ Ax:0, Ay:0, Dx:1, Dy:1, deg:180, sign:VALLEY });
-}
-
-// FOLD loader (Crane)
-let craneMesh = null;
-
-function triangulateFace2D(faceIndices, verts){
-  // verts: [ [x,y,(z)], ... ] — if 3D, project to local 2D plane around first 3 points
-  const idx0 = faceIndices[0];
-  const p0 = verts[idx0];
-  const is3D = p0.length >= 3;
-  let flat = [];
-  if (!is3D){
-    for (const i of faceIndices){ flat.push(verts[i][0], verts[i][1]); }
-  } else {
-    const P0 = new THREE.Vector3(...verts[faceIndices[0]], 0).setZ(verts[faceIndices[0]][2]||0);
-    const P1 = new THREE.Vector3(...verts[faceIndices[1]], 0).setZ(verts[faceIndices[1]][2]||0);
-    const P2 = new THREE.Vector3(...verts[faceIndices[2]], 0).setZ(verts[faceIndices[2]][2]||0);
-    const e1 = P1.clone().sub(P0).normalize();
-    const e2 = P2.clone().sub(P0).addScaledVector(e1, -P2.clone().sub(P0).dot(e1)).normalize();
-    for (const i of faceIndices){
-      const P = new THREE.Vector3(...verts[i], 0).setZ(verts[i][2]||0);
-      const v = P.clone().sub(P0);
-      flat.push(v.dot(e1), v.dot(e2));
-    }
-  }
-  const ears = earcut(flat);
-  const tris = [];
-  for (let t=0;t<ears.length;t+=3){
-    tris.push([faceIndices[ears[t]], faceIndices[ears[t+1]], faceIndices[ears[t+2]]]);
-  }
-  return tris;
-}
-
-function buildMeshFromFOLD(fold){
-  const verts = (fold.vertices_coords3d || fold.vertices_coords || []);
-  const faces = fold.faces_vertices || [];
-  if (!verts.length || !faces.length) throw new Error('FOLD has no faces/vertices.');
-  const pos = [];
-  for (const f of faces){
-    if (f.length === 3){
-      for (const i of f){ const v=verts[i]; pos.push(v[0], v[1], v[2]||0); }
-    } else if (f.length > 3){
-      const tris = triangulateFace2D(f, verts);
-      for (const tri of tris){ for (const i of tri){ const v=verts[i]; pos.push(v[0], v[1], v[2]||0); } }
-    }
-  }
-  if (pos.length < 9) throw new Error('Triangulation produced no triangles.');
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.computeVertexNormals();
-  return new THREE.Mesh(g, new THREE.ShaderMaterial({
-    vertexShader: vs, fragmentShader: fs, uniforms, side: THREE.DoubleSide
-  }));
-}
-
-function showCraneMesh(mesh){
-  if (craneMesh) scene.remove(craneMesh);
-  craneMesh = mesh;
-  craneMesh.position.set(0, 0, 0.002);
-  scene.add(craneMesh);
-  // ensure sheet is hidden and crease count is zero (so crane isn’t accidentally “folded”)
-  sheet.visible = false;
-  base.count = 0; pushToUniforms();
-}
-
-async function tryFetchCraneFold(){
-  try{
-    const res = await fetch('./crane.fold', { cache:'no-store' });
-    if (!res.ok) throw new Error('No crane.fold in repo root.');
-    return await res.json();
-  }catch(e){ return null; }
-}
-
-async function handleFOLD(obj){
-  try{
-    // If folded mesh (faces+verts), just build mesh
-    if (Array.isArray(obj.faces_vertices) && obj.faces_vertices.length && Array.isArray(obj.vertices_coords) && obj.vertices_coords.length){
-      const mesh = buildMeshFromFOLD(obj);
-      showCraneMesh(mesh);
-      setFoldStatus('Loaded folded mesh from FOLD (faces+verts).');
-      return;
-    }
-
-    // Otherwise, attempt CP preview by mapping edges to creases (best-effort)
-    const Vc = obj.vertices_coords, Ev = obj.edges_vertices, Ea = obj.edges_assignment, Ef = obj.edges_foldAngle;
-    if (!Vc || !Ev || !Ea){ throw new Error('FOLD missing CP fields (vertices_coords, edges_vertices, edges_assignment).'); }
-
-    // Fit CP to our sheet
-    let minX=+Infinity,minY=+Infinity,maxX=-Infinity,maxY=-Infinity;
-    for (const v of Vc){ const x=v[0], y=v[1]; if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
-    const w=maxX-minX||1, h=maxY-minY||1; const s = Math.min(SIZE/w, SIZE/h); const cx=(minX+maxX)/2, cy=(minY+maxY)/2;
-
-    resetBase();
-    const N = Math.min(Ev.length, MAX_CREASES);
-    for (let i=0;i<N;i++){
-      const assign = (Ea[i]||'').toUpperCase();
-      if (assign!=='M' && assign!=='V') continue;
-      const [ia,ib] = Ev[i] || [];
-      const A = Vc[ia], B = Vc[ib]; if (!A || !B) continue;
-      const Ax=(A[0]-cx)*s, Ay=(A[1]-cy)*s; const Dx=B[0]-A[0], Dy=B[1]-A[1];
-      let deg = 120; let sign = assign==='M'? MOUNTAIN : VALLEY;
-      if (Ef && typeof Ef[i]==='number'){ deg = Math.min(180, Math.abs(Ef[i])); sign = (Ef[i]>=0)? VALLEY : MOUNTAIN; } // valley +, mountain −
-      addCrease({ Ax, Ay, Dx, Dy, deg, sign });
-    }
-    sheet.visible = true; if (craneMesh) { scene.remove(craneMesh); craneMesh = null; }
-    setFoldStatus('Loaded CP preview from FOLD (best-effort).');
-  }catch(err){
-    sheet.visible = true; if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
-    setFoldStatus(err.message || 'Failed to load FOLD.');
-  }
-}
-
-// ---------- GUI (optional look) ----------
+// ---------- GUI (optional look tweaks) ----------
 const gui = new GUI();
 const looks = gui.addFolder('Look');
 looks.add(uniforms.uSectors, 'value', 3, 24, 1).name('kaleidoSectors');
@@ -417,41 +302,140 @@ looks.add(bloom, 'strength', 0.0, 2.5, 0.01).name('bloomStrength');
 looks.add(bloom, 'radius', 0.0, 1.5, 0.01).name('bloomRadius');
 looks.close();
 
+// ---------- Presets ----------
+function preset_half_vertical_valley(){
+  resetBase();
+  addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
+}
+function preset_diagonal_valley(){
+  resetBase();
+  addCrease({ Ax:0, Ay:0, Dx:1, Dy:1, deg:180, sign:VALLEY });
+}
+
+// ---------- Built-in Flapping Bird (no external files) ----------
+const bird = {
+  group: null,
+  body: null,
+  leftWing: null,
+  rightWing: null,
+  auto: true,
+  amp: 0.6,
+  speed: 1.2,
+  base: 0.2,
+};
+
+function makeTriGeometry(pts /*array of [x,y,z] triples (multiple of 3)*/){
+  const pos = new Float32Array(pts.flat());
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+function buildFlappingBird(){
+  const gBody = makeTriGeometry([
+    // body diamond (two tris)
+    [ 0.00,  0.30, 0], [-0.15,  0.05, 0], [ 0.15,  0.05, 0],
+    [ 0.00, -0.20, 0], [-0.15,  0.05, 0], [ 0.15,  0.05, 0],
+
+    // tail wedge (two tris)
+    [-0.15,  0.05, 0], [-0.38,  0.00, 0], [-0.28, -0.06, 0],
+    [-0.15,  0.05, 0], [-0.28, -0.06, 0], [-0.20,  0.12, 0],
+
+    // neck/head (two tris)
+    [ 0.15,  0.05, 0], [ 0.32,  0.12, 0], [ 0.40,  0.05, 0],
+    [ 0.32,  0.12, 0], [ 0.42,  0.16, 0], [ 0.40,  0.05, 0],
+  ]);
+
+  // Wing geometry built around a hinge at local origin (0,0,0)
+  const gWingL = makeTriGeometry([
+    [ 0.00,  0.00, 0], [-0.95,  0.35, 0], [-0.90, -0.28, 0],
+  ]);
+  const gWingR = makeTriGeometry([
+    [ 0.00,  0.00, 0], [ 0.90, -0.28, 0], [ 0.95,  0.35, 0],
+  ]);
+
+  const body = new THREE.Mesh(gBody, mat);
+  const leftWing = new THREE.Mesh(gWingL, mat);
+  const rightWing = new THREE.Mesh(gWingR, mat);
+
+  // Position wings at “shoulders” (hinge points); geometry is defined relative to hinge
+  leftWing.position.set(-0.12, 0.08, 0.0);
+  rightWing.position.set( 0.12, 0.08, 0.0);
+
+  const group = new THREE.Group();
+  group.add(body, leftWing, rightWing);
+
+  // Global transform so it reads well in the scene
+  group.rotation.x = -0.25; // match paper tilt
+  group.scale.set(1.9, 1.9, 1.0);
+
+  // Slight out-of-plane tilt to add depth
+  leftWing.rotation.x = 0.12;
+  rightWing.rotation.x = 0.12;
+
+  return { group, body, leftWing, rightWing };
+}
+
+function ensureBird(){
+  if (bird.group) return;
+  const b = buildFlappingBird();
+  bird.group = b.group; bird.body = b.body; bird.leftWing = b.leftWing; bird.rightWing = b.rightWing;
+  scene.add(bird.group);
+}
+
 // ---------- DOM wiring ----------
 const presetSel   = document.getElementById('preset');
 const btnApply    = document.getElementById('btnApply');
 const btnPlay     = document.getElementById('btnPlay');
 const btnSnap     = document.getElementById('btnSnap');
 const progress    = document.getElementById('progress');
-const foldFile    = document.getElementById('foldFile');
-const foldStatus  = document.getElementById('foldStatus');
 
-function setFoldStatus(msg){ foldStatus.textContent = msg; }
+const wingAmp     = document.getElementById('wingAmp');
+const wingSpeed   = document.getElementById('wingSpeed');
+const wingBase    = document.getElementById('wingBase');
 
-btnApply.onclick = async () => {
-  const v = presetSel.value;
-  if (v === 'crane-fold'){
-    // Show folded mesh if crane.fold exists; otherwise prompt to load
-    const json = await tryFetchCraneFold();
-    if (json){ await handleFOLD(json); }
-    else {
-      setFoldStatus('No ./crane.fold found — click “Load FOLD” and choose a crane .fold exported from origamisimulator.org.');
-      // Keep current sheet visible; do not hide content.
-    }
-    return;
+const shaderAuto = document.getElementById('shaderAuto');
+const shaderGlobalSpeed = document.getElementById('shaderGlobalSpeed');
+const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueSpeed = document.getElementById('hueSpeed');
+const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmSpeed = document.getElementById('filmSpeed');
+const edgeBase = document.getElementById('edgeBase'), edgeAmp = document.getElementById('edgeAmp'), edgeSpeed = document.getElementById('edgeSpeed');
+
+let currentPreset = 'half-vertical-valley';
+
+btnApply.onclick = () => {
+  currentPreset = presetSel.value;
+
+  if (currentPreset === 'flapping-bird'){
+    // Show bird, hide sheet & zero out creases
+    ensureBird();
+    sheet.visible = false;
+    resetBase(); pushToUniforms();
+  } else {
+    // Show sheet, hide bird (if present)
+    sheet.visible = true;
+    if (bird.group) bird.group.visible = false;
+
+    if (currentPreset==='half-vertical-valley') preset_half_vertical_valley();
+    else if (currentPreset==='diagonal-valley') preset_diagonal_valley();
+
+    // small camera nudge for visual feedback
+    camera.position.x += (Math.random()-0.5) * 0.02;
+    camera.position.y += (Math.random()-0.5) * 0.02;
   }
-
-  // Basic folds
-  sheet.visible = true; if (craneMesh){ scene.remove(craneMesh); craneMesh = null; }
-  if (v==='half-vertical-valley') preset_half_vertical_valley();
-  else if (v==='diagonal-valley') preset_diagonal_valley();
-  drive.progress = parseFloat(progress.value);
-  setFoldStatus('Using built-in fold preset.');
 };
 
 presetSel.addEventListener('change', () => btnApply.click());
 
-btnPlay.onclick = () => { drive.play = !drive.play; btnPlay.textContent = drive.play ? 'Pause' : 'Play'; };
+btnPlay.onclick = () => {
+  if (currentPreset === 'flapping-bird'){
+    bird.auto = !bird.auto;
+    btnPlay.textContent = bird.auto ? 'Pause' : 'Play';
+  } else {
+    drive.play = !drive.play;
+    btnPlay.textContent = drive.play ? 'Pause' : 'Play';
+  }
+};
 
 btnSnap.onclick = () => {
   renderer.domElement.toBlob((blob) => {
@@ -463,23 +447,22 @@ btnSnap.onclick = () => {
   }, 'image/png', 1.0);
 };
 
-progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
-
-// File picker for FOLD
-foldFile.addEventListener('change', async (e) => {
-  const file = e.target.files?.[0]; if (!file) return;
-  const text = await file.text(); let obj;
-  try { obj = JSON.parse(text); } catch(_){ setFoldStatus('Invalid JSON in FOLD.'); return; }
-  await handleFOLD(obj);
+progress.addEventListener('input', () => {
+  if (currentPreset === 'flapping-bird'){
+    // When paused, use progress to scrub wing pose (−1..+1 mapped from 0..1)
+    const t = parseFloat(progress.value)*2 - 1;
+    const angle = bird.base + bird.amp * t;
+    if (bird.leftWing){ bird.leftWing.rotation.z =  angle; }
+    if (bird.rightWing){ bird.rightWing.rotation.z = -angle; }
+  } else {
+    drive.progress = parseFloat(progress.value);
+  }
 });
+wingAmp.addEventListener('input', () => bird.amp = parseFloat(wingAmp.value));
+wingSpeed.addEventListener('input', () => bird.speed = parseFloat(wingSpeed.value));
+wingBase.addEventListener('input', () => bird.base = parseFloat(wingBase.value));
 
-// ---------- Shader Animation (sliders) ----------
-const shaderAuto = document.getElementById('shaderAuto');
-const shaderGlobalSpeed = document.getElementById('shaderGlobalSpeed');
-const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueSpeed = document.getElementById('hueSpeed');
-const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmSpeed = document.getElementById('filmSpeed');
-const edgeBase = document.getElementById('edgeBase'), edgeAmp = document.getElementById('edgeAmp'), edgeSpeed = document.getElementById('edgeSpeed');
-
+// ---------- Shader Animation (texture look) ----------
 function updateShaderAnim(t){
   const auto = shaderAuto.value === 'on';
   const gs = parseFloat(shaderGlobalSpeed.value);
@@ -495,20 +478,39 @@ function updateShaderAnim(t){
 
 // ---------- Start ----------
 function start(){
+  // Bird not created until first time it’s selected
   presetSel.value = 'half-vertical-valley';
   btnApply.click();
   progress.value = String(drive.progress);
 }
 start();
 
-// ---------- Per-frame update ----------
+// ---------- Frame loop ----------
 function tick(tMs){
   const t = tMs * 0.001;
   uniforms.uTime.value = t;
 
-  computeAngles(t);
-  computeFrames();
-  pushToUniforms();
+  if (currentPreset === 'flapping-bird'){
+    // show bird
+    if (bird.group) bird.group.visible = true;
+
+    // live wing animation when “auto” is on
+    if (bird.auto && bird.leftWing && bird.rightWing){
+      const a = bird.base + bird.amp * Math.sin(t * bird.speed);
+      bird.leftWing.rotation.z  =  a;
+      bird.rightWing.rotation.z = -a;
+    }
+
+    // disable the fold engine so shader runs with uCreaseCount=0
+    resetBase(); pushToUniforms();
+  } else {
+    // folds: compute + upload crease transforms
+    computeAngles(t);
+    computeFrames();
+    pushToUniforms();
+  }
+
+  // shader look
   updateShaderAnim(t);
 
   controls.update();
