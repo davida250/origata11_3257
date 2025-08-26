@@ -1,14 +1,8 @@
 /**
  *  Origata v0.23
- *
- * - Presets: Half Vertical (Valley), Diagonal (Valley), Gate (2× Valley)
- * - Progress (fold) + Global Speed on the toolbar
- * - Advanced drawer: each visual parameter has exactly two labeled sliders:
- *      Amount (variability or static offset) + Speed (animation rate)
- * - Auto FX toggle:
- *      ON  -> value = base + amount * sin(globalSpeed * speed * t + phase)
- *      OFF -> value = base + amount   (static)
- * - Valley = +°, Mountain = −°  (Origami Simulator convention)
+ * - Each material/texture control = Amount + Speed (with numeric outputs)
+ * - All 0..1 ranges use decimal steps (0.01/0.001) so you can fine‑tune values
+ * - Expand (gear) button is solid blue via CSS
  */
 
 import * as THREE from 'three';
@@ -127,19 +121,26 @@ const drive = { progress:0.65, globalSpeed:1.0 };
 const uniforms = {
   uTime:          { value: 0 },
   uSectors:       { value: 10.0 },
-  uHueShift:      { value: 0.05 },   // base hue offset
+
+  // texture/pattern selection
+  uTexMode:       { value: 0 },    // 0: psychedelic, 1: paper, 2: marble, 3: stripes
+  uTexAmt:        { value: 0.50 }, // Amount (variability)
+  uTexSpeed:      { value: 0.60 }, // Speed multiplier for texture animation
+
+  // color / paper optics
+  uHueShift:      { value: 0.05 },
   uIridescence:   { value: 0.65 },
   uFilmIOR:       { value: 1.35 },
-  uFilmNm:        { value: 360.0 },  // base thin-film thickness
+  uFilmNm:        { value: 360.0 },
   uFiber:         { value: 0.35 },
-  uEdgeGlow:      { value: 0.7 },    // base edge glow
+  uEdgeGlow:      { value: 0.7 },
 
   // reflections & lighting
   uEnvMap:        { value: cubeRT.texture },
-  uReflectivity:  { value: 0.25 },   // base reflectivity
-  uSpecIntensity: { value: 0.7 },    // base spec
-  uSpecPower:     { value: 24.0 },   // fixed shininess
-  uRimIntensity:  { value: 0.5 },    // base rim
+  uReflectivity:  { value: 0.25 },
+  uSpecIntensity: { value: 0.7 },
+  uSpecPower:     { value: 24.0 },
+  uRimIntensity:  { value: 0.5 },
   uLightDir:      { value: new THREE.Vector3(0.5, 1.0, 0.25).normalize() },
 
   // folding data
@@ -237,7 +238,12 @@ const fs = /* glsl */`
   precision highp float;
 
   uniform float uTime;
-  uniform float uSectors, uHueShift;
+  uniform float uSectors;
+  uniform int   uTexMode;
+  uniform float uTexAmt;
+  uniform float uTexSpeed;
+
+  uniform float uHueShift;
   uniform float uIridescence, uFilmIOR, uFilmNm, uFiber, uEdgeGlow;
 
   uniform samplerCube uEnvMap;
@@ -276,21 +282,62 @@ const fs = /* glsl */`
   }
   float sdLine(vec2 p, vec2 a, vec2 d){ return d.x*(p.y - a.y) - d.y*(p.x - a.x); }
 
-  void main(){
-    // Kaleidoscopic base pattern
-    float theta = atan(vPos.z, vPos.x);
-    float r = length(vPos.xz) * 0.55;
+  vec3 texturePsychedelic(vec3 worldPos, float t){
+    // kaleidoscopic base
+    float theta = atan(worldPos.z, worldPos.x);
+    float r = length(worldPos.xz) * 0.55;
     float seg = 2.0*PI / max(3.0, uSectors);
-    float a = mod(theta, seg); a = abs(a - 0.5*seg);
-    vec2 k = vec2(cos(a), sin(a)) * r;
+    float aa = mod(theta, seg); aa = abs(aa - 0.5*seg);
+    vec2 k = vec2(cos(aa), sin(aa)) * r;
 
-    vec2 q = k*2.0 + vec2(0.15*uTime, -0.1*uTime);
-    q += 0.5*vec2(noise(q+13.1), noise(q+71.7));
+    float amp = mix(0.2, 2.0, clamp(uTexAmt, 0.0, 1.0));
+    vec2 q = k*2.0*amp + vec2(0.18*t, -0.12*t);
+    q += amp*0.5*vec2(noise(q+13.1), noise(q+71.7));
+
     float n = noise(q*2.0) * 0.75 + 0.25*noise(q*5.0);
-    float hue = fract(n + 0.15*sin(uTime*0.3) + uHueShift);
-    vec3 baseCol = hsv2rgb(vec3(hue, 0.9, smoothstep(0.25, 1.0, n)));
+    float hue = fract(n + 0.15*sin(t*0.3) + uHueShift);
+    return hsv2rgb(vec3(hue, 0.9, smoothstep(0.25, 1.0, n)));
+  }
 
-    // paper fibers
+  vec3 texturePaper(vec2 p, float t){
+    // off-white with subtle grain; uTexAmt controls grain amount
+    float g = fbm(p*25.0 + vec2(0.1*t, -0.07*t));
+    vec3 base = vec3(0.93, 0.935, 0.91);
+    return base + (g-0.5) * 0.15 * clamp(uTexAmt,0.0,1.0);
+  }
+
+  vec3 textureMarble(vec2 p, float t){
+    vec2 q = p*2.2;
+    float swirl = q.x*6.0 + 2.5*fbm(q*1.5 + vec2(0.3*t, -0.2*t));
+    float m = 0.5 + 0.5*sin(swirl);
+    float c = pow(m, mix(1.0, 3.0, clamp(uTexAmt,0.0,1.0)));
+    return mix(vec3(0.85,0.86,0.9), vec3(0.2,0.22,0.26), c);
+  }
+
+  vec3 textureStripes(vec2 p, float t){
+    float s = 0.5 + 0.5*sin(p.x*60.0 + t*4.0);
+    float k = pow(s, mix(1.0, 3.0, clamp(uTexAmt,0.0,1.0)));
+    vec3 a = hsv2rgb(vec3(fract(uHueShift), 0.85, 0.9));
+    vec3 b = hsv2rgb(vec3(fract(uHueShift + 0.2), 0.85, 0.9));
+    return mix(a, b, k);
+  }
+
+  void main(){
+    float tTex = uTime * uTexSpeed;
+
+    // choose base color by texture mode
+    vec3 baseCol;
+    if (uTexMode == 0){
+      baseCol = texturePsychedelic(vPos, tTex);
+    } else if (uTexMode == 1){
+      baseCol = texturePaper(vLocal.xy, tTex);
+    } else if (uTexMode == 2){
+      baseCol = textureMarble(vLocal.xy, tTex);
+    } else {
+      baseCol = textureStripes(vLocal.xy, tTex);
+    }
+
+    // paper fibers (applies to all modes)
     float fiberLines = 0.0;
     {
       float warp = fbm(vLocal.xy*4.0 + vec2(0.2*uTime, -0.1*uTime));
@@ -317,7 +364,7 @@ const fs = /* glsl */`
     vec3 V = normalize(cameraPosition - vPos);
     vec3 N = normalize(vN);
 
-    // thin-film + Fresnel-ish blend
+    // thin-film + Fresnel blend
     float cosT = clamp(dot(N, V), 0.0, 1.0);
     vec3 film = thinFilm(cosT, uFilmIOR, uFilmNm);
     float F = pow(1.0 - cosT, 5.0);
@@ -385,19 +432,28 @@ const sectorsOut  = document.getElementById('sectorsOut');
 const btnMore     = document.getElementById('btnMore');
 const drawer      = document.getElementById('drawer');
 
+/* NEW: texture UI */
+const texMode     = document.getElementById('texMode');
+const texAmp      = document.getElementById('texAmp');
+const texAmpOut   = document.getElementById('texAmpOut');
+const texSpeed    = document.getElementById('texSpeed');
+const texSpeedOut = document.getElementById('texSpeedOut');
+
 /* Parameter wiring: base constants + (Amount, Speed) sliders */
 const el = id => document.getElementById(id);
 function out(id){ return document.getElementById(id); }
 
 const PARAMS = {
-  hue:  { base: 0.05, min:0,   max:1,   phase:0.00, amp: el('hueAmp'),  aOut: out('hueAmpOut'),  spd: el('hueSpeed'),  sOut: out('hueSpeedOut'),  set:v=>uniforms.uHueShift.value=v },
-  film: { base:360.0, min:100, max:800, phase:0.65, amp: el('filmAmp'), aOut: out('filmAmpOut'), spd: el('filmSpeed'), sOut: out('filmSpeedOut'), set:v=>uniforms.uFilmNm.value=v },
-  edge: { base: 0.70, min:0,   max:2,   phase:1.30, amp: el('edgeAmp'), aOut: out('edgeAmpOut'), spd: el('edgeSpeed'), sOut: out('edgeSpeedOut'), set:v=>uniforms.uEdgeGlow.value=v },
-  refl: { base: 0.25, min:0,   max:1,   phase:2.10, amp: el('reflAmp'), aOut: out('reflAmpOut'), spd: el('reflSpeed'), sOut: out('reflSpeedOut'), set:v=>uniforms.uReflectivity.value=v },
-  spec: { base: 0.70, min:0,   max:2,   phase:0.25, amp: el('specAmp'), aOut: out('specAmpOut'), spd: el('specSpeed'), sOut: out('specSpeedOut'), set:v=>uniforms.uSpecIntensity.value=v },
-  rim:  { base: 0.50, min:0,   max:2,   phase:0.85, amp: el('rimAmp'),  aOut: out('rimAmpOut'),  spd: el('rimSpeed'),  sOut: out('rimSpeedOut'),  set:v=>uniforms.uRimIntensity.value=v },
-  bstr: { base: 0.35, min:0,   max:2.5, phase:1.75, amp: el('bloomAmp'), aOut: out('bloomAmpOut'), spd: el('bloomSpeed'), sOut: out('bloomSpeedOut'), set:v=>{ bloom.strength=v; } },
-  brad: { base: 0.60, min:0,   max:1.5, phase:2.50, amp: el('bloomRadAmp'), aOut: out('bloomRadAmpOut'), spd: el('bloomRadSpeed'), sOut: out('bloomRadSpeedOut'), set:v=>{ bloom.radius=v; } },
+  // Texture "Amount" animates around a base (0.5) to keep usable range without clipping
+  tex:  { base: 0.50, min:0,   max:1,   phase:1.10, amp: texAmp,               aOut: texAmpOut,               spd: texSpeed,               sOut: texSpeedOut,               set:v=>{ uniforms.uTexAmt.value=v; } },
+  hue:  { base: 0.05, min:0,   max:1,   phase:0.00, amp: el('hueAmp'),         aOut: out('hueAmpOut'),        spd: el('hueSpeed'),         sOut: out('hueSpeedOut'),        set:v=>{ uniforms.uHueShift.value=v; } },
+  film: { base:360.0, min:100, max:800, phase:0.65, amp: el('filmAmp'),        aOut: out('filmAmpOut'),       spd: el('filmSpeed'),        sOut: out('filmSpeedOut'),       set:v=>{ uniforms.uFilmNm.value=v; } },
+  edge: { base: 0.70, min:0,   max:2,   phase:1.30, amp: el('edgeAmp'),        aOut: out('edgeAmpOut'),       spd: el('edgeSpeed'),        sOut: out('edgeSpeedOut'),       set:v=>{ uniforms.uEdgeGlow.value=v; } },
+  refl: { base: 0.25, min:0,   max:1,   phase:2.10, amp: el('reflAmp'),        aOut: out('reflAmpOut'),       spd: el('reflSpeed'),        sOut: out('reflSpeedOut'),       set:v=>{ uniforms.uReflectivity.value=v; } },
+  spec: { base: 0.70, min:0,   max:2,   phase:0.25, amp: el('specAmp'),        aOut: out('specAmpOut'),       spd: el('specSpeed'),        sOut: out('specSpeedOut'),       set:v=>{ uniforms.uSpecIntensity.value=v; } },
+  rim:  { base: 0.50, min:0,   max:2,   phase:0.85, amp: el('rimAmp'),         aOut: out('rimAmpOut'),        spd: el('rimSpeed'),         sOut: out('rimSpeedOut'),        set:v=>{ uniforms.uRimIntensity.value=v; } },
+  bstr: { base: 0.35, min:0,   max:2.5, phase:1.75, amp: el('bloomAmp'),       aOut: out('bloomAmpOut'),      spd: el('bloomSpeed'),       sOut: out('bloomSpeedOut'),      set:v=>{ bloom.strength=v; } },
+  brad: { base: 0.60, min:0,   max:1.5, phase:2.50, amp: el('bloomRadAmp'),    aOut: out('bloomRadAmpOut'),   spd: el('bloomRadSpeed'),    sOut: out('bloomRadSpeedOut'),   set:v=>{ bloom.radius=v; } },
 };
 
 function setOut(el,val,dec=2){ el.textContent = Number(val).toFixed(dec); }
@@ -415,7 +471,7 @@ function bindRangeWithOut(rangeEl, outEl, decimals=2, onInput){
   rangeEl.addEventListener('input', sync); sync();
 }
 
-bindRangeWithOut(progress,    progressOut,    2, v => { drive.progress = v; });
+bindRangeWithOut(progress,    progressOut,    3, v => { drive.progress = v; });
 bindRangeWithOut(globalSpeed, globalSpeedOut, 2, v => { drive.globalSpeed = v; });
 bindRangeWithOut(sectors,     sectorsOut,     0, v => { uniforms.uSectors.value = v; });
 
@@ -440,9 +496,13 @@ presetSel.addEventListener('change', () => {
   if (v==='half-vertical-valley') preset_half_vertical_valley();
   else if (v==='diagonal-valley') preset_diagonal_valley();
   else if (v==='gate-valley') preset_gate_valley();
-  // tiny nudge for feedback
   camera.position.x += (Math.random()-0.5)*0.02;
   camera.position.y += (Math.random()-0.5)*0.02;
+});
+
+/* Texture select */
+texMode.addEventListener('change', () => {
+  uniforms.uTexMode.value = parseInt(texMode.value, 10) | 0;
 });
 
 /* ---------- Animation model: base + amount*(sin(...) or 1) ---------- */
@@ -450,7 +510,6 @@ function updateAnimatedParameters(t){
   const g = drive.globalSpeed;
   const animOn = autoFx.checked;
 
-  // helper applying either oscillation or static offset
   function apply(p){
     const amp = +p.amp.value;
     const spd = +p.spd.value;
@@ -460,6 +519,7 @@ function updateAnimatedParameters(t){
     p.set(clamp(val, p.min, p.max));
   }
 
+  apply(PARAMS.tex);
   apply(PARAMS.hue);
   apply(PARAMS.film);
   apply(PARAMS.edge);
@@ -468,6 +528,9 @@ function updateAnimatedParameters(t){
   apply(PARAMS.rim);
   apply(PARAMS.bstr);
   apply(PARAMS.brad);
+
+  // Texture flow speed is driven directly (globalSpeed multiplies it)
+  uniforms.uTexSpeed.value = g * (+PARAMS.tex.spd.value);
 }
 
 /* ---------- Folding ---------- */
@@ -510,7 +573,8 @@ function pushAll(){ pushToUniforms(); }
 
 /* ---------- Start ---------- */
 presetSel.value = 'half-vertical-valley';
-presetSel.dispatchEvent(new Event('change'));
+preset_half_vertical_valley(); // initialize crease set
+uniforms.uTexMode.value = parseInt(texMode.value, 10) | 0;
 
 /* ---------- Frame loop ---------- */
 function tick(tMs){
