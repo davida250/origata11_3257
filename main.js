@@ -1,20 +1,13 @@
 /**
- * Psychedelic Origami — Simple Folds (polished UI, bottom controls only)
- *
- * Presets:
- *  - Half Vertical (Valley)
- *  - Diagonal (Valley)
- *  - Gate (2× Valley)
- *
- * UX:
- *  - No play/pause; one Progress slider controls folding.
- *  - One Global Speed slider scales ALL animation (shader motion + parameter cycles).
- *  - Auto Effects toggle enables/disables parameter oscillation; base values still apply.
+ * Psychedelic Origami — Compact Toolbar + Overlay Drawer
+ * - Three simple fold presets (Half Vertical, Diagonal, Gate)
+ * - One Progress slider (no play/pause)
+ * - One Global Speed slider scales ALL time-based animation (shader cycles)
+ * - Advanced controls live in a bottom overlay drawer (<details>) for minimal screen usage
  *
  * Notes:
- *  - Fold sign: Valley = +°, Mountain = −°. (Origami Simulator convention) 
- *  - Dynamic reflections: CubeCamera captures a live env map; the paper is hidden during capture
- *    as recommended in three.js docs to avoid self-reflections.
+ *  - Valley = +°, Mountain = −° (Origami Simulator convention)
+ *  - Dynamic reflections with THREE.CubeCamera; the paper is hidden during capture to avoid self-reflection
  */
 
 import * as THREE from 'three';
@@ -78,7 +71,7 @@ function rotPointAroundAxis(p, a, axisUnit, ang){ tmp.v.copy(p).sub(a).applyAxis
 function rotVecAxis(v, axisUnit, ang){ v.applyAxisAngle(axisUnit, ang); }
 function clamp01(x){ return x<0?0:x>1?1:x; }
 
-// ---------- Minimal crease engine with small mask budget (safe uniforms) ----------
+// ---------- Minimal crease engine with tiny mask budget ----------
 const MAX_CREASES = 6;
 const MAX_MASKS_PER = 2;
 const VALLEY = +1, MOUNTAIN = -1;
@@ -379,13 +372,13 @@ function preset_gate_valley(){
 
 // ---------- DOM wiring ----------
 const presetSel   = document.getElementById('preset');
-const btnApply    = document.getElementById('btnApply');
 const btnSnap     = document.getElementById('btnSnap');
 const progress    = document.getElementById('progress');
-
 const shaderAuto  = document.getElementById('shaderAuto');
 const globalSpeed = document.getElementById('globalSpeed');
 const sectors     = document.getElementById('sectors');
+const btnMore     = document.getElementById('btnMore');
+const drawer      = document.getElementById('drawer');
 
 const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueVar = document.getElementById('hueVar');
 const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmVar = document.getElementById('filmVar');
@@ -395,19 +388,19 @@ const reflBase = document.getElementById('reflBase'), reflAmp = document.getElem
 const specInt = document.getElementById('specInt'), specPow = document.getElementById('specPow'), rimInt = document.getElementById('rimInt');
 const bloomStr = document.getElementById('bloomStr'), bloomRad = document.getElementById('bloomRad');
 
-btnApply.onclick = () => {
+// Preset change (no Apply button; instant)
+presetSel.addEventListener('change', () => {
   const v = presetSel.value;
   if (v==='half-vertical-valley') preset_half_vertical_valley();
   else if (v==='diagonal-valley') preset_diagonal_valley();
   else if (v==='gate-valley') preset_gate_valley();
 
-  // subtle camera micro‑nudge for feedback
   camera.position.x += (Math.random()-0.5) * 0.02;
   camera.position.y += (Math.random()-0.5) * 0.02;
-};
-presetSel.addEventListener('change', () => btnApply.click());
+});
 
-btnSnap.onclick = () => {
+// PNG save
+btnSnap.addEventListener('click', () => {
   renderer.domElement.toBlob((blob) => {
     if (!blob) return;
     const url = URL.createObjectURL(blob);
@@ -415,23 +408,31 @@ btnSnap.onclick = () => {
     a.href = url; a.download = 'origami.png'; a.click();
     URL.revokeObjectURL(url);
   }, 'image/png', 1.0);
-};
+});
 
+// Toolbar sliders/toggles
 progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
 globalSpeed.addEventListener('input', () => { drive.globalSpeed = parseFloat(globalSpeed.value); });
 sectors.addEventListener('input', () => { uniforms.uSectors.value = parseFloat(sectors.value); });
 
+// Base values (applied even when Auto FX = off)
 hueBase.addEventListener('input',  () => { uniforms.uHueShift.value     = THREE.MathUtils.clamp(parseFloat(hueBase.value), 0, 1);  });
 filmBase.addEventListener('input', () => { uniforms.uFilmNm.value       = THREE.MathUtils.clamp(parseFloat(filmBase.value), 100, 800); });
 edgeBase.addEventListener('input', () => { uniforms.uEdgeGlow.value     = THREE.MathUtils.clamp(parseFloat(edgeBase.value), 0, 2); });
 reflBase.addEventListener('input', () => { uniforms.uReflectivity.value = THREE.MathUtils.clamp(parseFloat(reflBase.value), 0, 1);  });
 
+// Surface + bloom
 specInt.addEventListener('input', () => uniforms.uSpecIntensity.value = parseFloat(specInt.value));
 specPow.addEventListener('input', () => uniforms.uSpecPower.value     = parseFloat(specPow.value));
 rimInt .addEventListener('input', () => uniforms.uRimIntensity.value  = parseFloat(rimInt.value));
-
 bloomStr.addEventListener('input', () => bloom.strength = parseFloat(bloomStr.value));
 bloomRad.addEventListener('input', () => bloom.radius   = parseFloat(bloomRad.value));
+
+// Drawer toggle
+btnMore.addEventListener('click', () => {
+  drawer.open = !drawer.open;
+  btnMore.setAttribute('aria-expanded', drawer.open ? 'true' : 'false');
+});
 
 // ---------- Shader Animation (global + per-parameter speed variation) ----------
 function updateShaderAnim(t){
@@ -498,7 +499,7 @@ function pushAll(){ pushToUniforms(); }
 
 // ---------- Start ----------
 presetSel.value = 'half-vertical-valley';
-btnApply.click();
+presetSel.dispatchEvent(new Event('change')); // apply
 progress.value = String(drive.progress);
 
 // ---------- Frame loop ----------
