@@ -1,5 +1,5 @@
 /**
- * Psychedelic Origami — Sleek Controls (Amount + Speed per parameter)
+ *  Origata v0.23
  *
  * - Presets: Half Vertical (Valley), Diagonal (Valley), Gate (2× Valley)
  * - Progress (fold) + Global Speed on the toolbar
