@@ -1,18 +1,20 @@
 /**
- * Psychedelic Origami — Simple Folds + Reflections (no external files)
+ * Psychedelic Origami — Simple Folds (polished UI, bottom controls only)
  *
- * Presets (3):
+ * Presets:
  *  - Half Vertical (Valley)
  *  - Diagonal (Valley)
  *  - Gate (2× Valley)
  *
- * Global Animation:
- *  - One slider controls the base speed for folds + shader.
- *  - Each shader parameter has a "Speed Var" that multiplies around the global speed.
+ * UX:
+ *  - No play/pause; one Progress slider controls folding.
+ *  - One Global Speed slider scales ALL animation (shader motion + parameter cycles).
+ *  - Auto Effects toggle enables/disables parameter oscillation; base values still apply.
  *
  * Notes:
- *  - Fold angle sign matches Origami Simulator (valley +°, mountain −°). [Design Tips]
- *  - Dynamic reflections via CubeCamera (updated every frame). 
+ *  - Fold sign: Valley = +°, Mountain = −°. (Origami Simulator convention) 
+ *  - Dynamic reflections: CubeCamera captures a live env map; the paper is hidden during capture
+ *    as recommended in three.js docs to avoid self-reflections.
  */
 
 import * as THREE from 'three';
@@ -23,7 +25,6 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import GUI from 'lil-gui';
 
 // ---------- Renderer / Scene ----------
 const app = document.getElementById('app');
@@ -76,13 +77,8 @@ function sdLine2(p, a, d){ const px=p.x-a.x, py=p.y-a.y; return d.x*py - d.y*px;
 function rotPointAroundAxis(p, a, axisUnit, ang){ tmp.v.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a); p.copy(tmp.v); }
 function rotVecAxis(v, axisUnit, ang){ v.applyAxisAngle(axisUnit, ang); }
 function clamp01(x){ return x<0?0:x>1?1:x; }
-const Ease = {
-  linear: t => t,
-  smoothstep: t => t*t*(3-2*t),
-  easeInOutCubic: t => (t<0.5? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2)
-};
 
-// ---------- Minimal crease engine with tiny mask budget ----------
+// ---------- Minimal crease engine with small mask budget (safe uniforms) ----------
 const MAX_CREASES = 6;
 const MAX_MASKS_PER = 2;
 const VALLEY = +1, MOUNTAIN = -1;
@@ -130,7 +126,7 @@ const eff = {
   mD: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0)))
 };
 
-const drive = { play:false, progress:0.65, easing:'smoothstep', globalSpeed:1.0 };
+const drive = { progress:0.65, globalSpeed:1.0 };
 
 // ---------- Uniforms ----------
 const uniforms = {
@@ -181,6 +177,8 @@ function pushToUniforms(){
   uniforms.uMaskA.value = flatA;
   uniforms.uMaskD.value = flatD;
   uniforms.uMaskOn.value = Float32Array.from(on);
+
+  mat.uniformsNeedUpdate = true;
 }
 
 // ---------- Shaders ----------
@@ -312,7 +310,7 @@ const fs = /* glsl */`
     float grain = fbm(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
-    // crease glow (distance to nearest crease)
+    // crease glow
     float minD = 1e9;
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
@@ -324,7 +322,7 @@ const fs = /* glsl */`
     float aa = fwidth(minD);
     float edge = 1.0 - smoothstep(0.0025, 0.0025 + aa, minD);
 
-    // viewing terms
+    // view/lighting
     vec3 V = normalize(cameraPosition - vPos);
     vec3 N = normalize(vN);
 
@@ -363,16 +361,6 @@ const mat = new THREE.ShaderMaterial({
 const sheet = new THREE.Mesh(sheetGeo, mat);
 scene.add(sheet);
 
-// ---------- GUI (optional visual tuning) ----------
-const gui = new GUI();
-const looks = gui.addFolder('Look');
-looks.add(uniforms.uSectors, 'value', 3, 24, 1).name('kaleidoSectors');
-looks.add(uniforms.uHueShift, 'value', 0, 1, 0.001).name('hueShift');
-looks.add(uniforms.uIridescence, 'value', 0, 1, 0.001).name('iridescence');
-looks.add(uniforms.uFilmIOR, 'value', 1.0, 2.333, 0.001).name('filmIOR');
-looks.add(uniforms.uFiber, 'value', 0, 1, 0.001).name('paperFiber');
-looks.close();
-
 // ---------- Presets ----------
 function preset_half_vertical_valley(){
   resetBase();
@@ -392,15 +380,12 @@ function preset_gate_valley(){
 // ---------- DOM wiring ----------
 const presetSel   = document.getElementById('preset');
 const btnApply    = document.getElementById('btnApply');
-const btnPlay     = document.getElementById('btnPlay');
-const btnReset    = document.getElementById('btnReset');
-const progress    = document.getElementById('progress');
-const easingSel   = document.getElementById('easing');
 const btnSnap     = document.getElementById('btnSnap');
+const progress    = document.getElementById('progress');
 
-// global + shader anim controls
 const shaderAuto  = document.getElementById('shaderAuto');
 const globalSpeed = document.getElementById('globalSpeed');
+const sectors     = document.getElementById('sectors');
 
 const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueVar = document.getElementById('hueVar');
 const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmVar = document.getElementById('filmVar');
@@ -416,15 +401,11 @@ btnApply.onclick = () => {
   else if (v==='diagonal-valley') preset_diagonal_valley();
   else if (v==='gate-valley') preset_gate_valley();
 
+  // subtle camera micro‑nudge for feedback
   camera.position.x += (Math.random()-0.5) * 0.02;
   camera.position.y += (Math.random()-0.5) * 0.02;
 };
 presetSel.addEventListener('change', () => btnApply.click());
-
-btnPlay.onclick = () => { drive.play = !drive.play; btnPlay.textContent = drive.play ? 'Pause' : 'Play'; };
-btnReset.onclick = () => { drive.play=false; btnPlay.textContent='Play'; drive.progress=0; progress.value='0'; };
-progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
-easingSel.addEventListener('change', () => { drive.easing = easingSel.value; });
 
 btnSnap.onclick = () => {
   renderer.domElement.toBlob((blob) => {
@@ -436,7 +417,15 @@ btnSnap.onclick = () => {
   }, 'image/png', 1.0);
 };
 
-// Surface + bloom
+progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
+globalSpeed.addEventListener('input', () => { drive.globalSpeed = parseFloat(globalSpeed.value); });
+sectors.addEventListener('input', () => { uniforms.uSectors.value = parseFloat(sectors.value); });
+
+hueBase.addEventListener('input',  () => { uniforms.uHueShift.value     = THREE.MathUtils.clamp(parseFloat(hueBase.value), 0, 1);  });
+filmBase.addEventListener('input', () => { uniforms.uFilmNm.value       = THREE.MathUtils.clamp(parseFloat(filmBase.value), 100, 800); });
+edgeBase.addEventListener('input', () => { uniforms.uEdgeGlow.value     = THREE.MathUtils.clamp(parseFloat(edgeBase.value), 0, 2); });
+reflBase.addEventListener('input', () => { uniforms.uReflectivity.value = THREE.MathUtils.clamp(parseFloat(reflBase.value), 0, 1);  });
+
 specInt.addEventListener('input', () => uniforms.uSpecIntensity.value = parseFloat(specInt.value));
 specPow.addEventListener('input', () => uniforms.uSpecPower.value     = parseFloat(specPow.value));
 rimInt .addEventListener('input', () => uniforms.uRimIntensity.value  = parseFloat(rimInt.value));
@@ -447,8 +436,6 @@ bloomRad.addEventListener('input', () => bloom.radius   = parseFloat(bloomRad.va
 // ---------- Shader Animation (global + per-parameter speed variation) ----------
 function updateShaderAnim(t){
   const auto = shaderAuto.value === 'on';
-  drive.globalSpeed = parseFloat(globalSpeed.value);
-
   const g = drive.globalSpeed;
 
   const HB = parseFloat(hueBase.value),  HA = parseFloat(hueAmp.value),  HV = parseFloat(hueVar.value);
@@ -466,22 +453,14 @@ function updateShaderAnim(t){
     uniforms.uFilmNm.value       = THREE.MathUtils.clamp(FB + FA*Math.sin(t*filmW + 0.65), 100, 800);
     uniforms.uEdgeGlow.value     = THREE.MathUtils.clamp(EB + EA*Math.sin(t*edgeW + 1.30), 0.0, 2.0);
     uniforms.uReflectivity.value = THREE.MathUtils.clamp(RB + RA*Math.sin(t*reflW + 2.10), 0.0, 1.0);
-  } else {
-    uniforms.uHueShift.value     = HB;
-    uniforms.uFilmNm.value       = FB;
-    uniforms.uEdgeGlow.value     = EB;
-    uniforms.uReflectivity.value = RB;
   }
 }
 
-// ---------- Folding solver (angle + frames) ----------
-function computeAngles(tSec){
-  const E = Ease[drive.easing] || Ease.linear;
-  const g = drive.globalSpeed;
-  const animT = drive.play ? (0.5 + 0.5*Math.sin(tSec * g)) : drive.progress;
-
+// ---------- Folding solver ----------
+function computeAngles(){
+  const t = clamp01(drive.progress);
   for (let i=0;i<base.count;i++){
-    eff.ang[i] = base.sign[i] * base.amp[i] * E(clamp01(animT));
+    eff.ang[i] = base.sign[i] * base.amp[i] * t;
     eff.mCount[i] = base.mCount[i];
     for (let m=0;m<MAX_MASKS_PER;m++){
       eff.mA[i][m].copy(base.mA[i][m]);
@@ -492,7 +471,6 @@ function computeAngles(tSec){
 }
 
 function computeFrames(){
-  // start from base frames
   for (let i=0;i<base.count;i++){
     eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize();
   }
@@ -516,9 +494,7 @@ function computeFrames(){
   }
 }
 
-function pushAll(){
-  pushToUniforms();
-}
+function pushAll(){ pushToUniforms(); }
 
 // ---------- Start ----------
 presetSel.value = 'half-vertical-valley';
@@ -527,18 +503,18 @@ progress.value = String(drive.progress);
 
 // ---------- Frame loop ----------
 function tick(tMs){
-  const t = tMs * 0.001;
+  const t = (tMs * 0.001) * drive.globalSpeed; // global speed influences ALL time-based animation
   uniforms.uTime.value = t;
 
   // Fold kinematics
-  computeAngles(t);
+  computeAngles();
   computeFrames();
   pushAll();
 
-  // Surface animation
+  // Shader animation
   updateShaderAnim(t);
 
-  // Update reflections (hide the sheet while capturing)
+  // Dynamic reflections (hide the sheet while capturing to avoid self-reflection)
   sheet.visible = false;
   cubeCam.position.copy(sheet.position);
   cubeCam.update(renderer, scene);
