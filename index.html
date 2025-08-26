@@ -3,13 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Psychedelic Origami — Simple Folds + Reflections</title>
+  <title>Psychedelic Origami — Simple Folds</title>
   <meta name="theme-color" content="#050509" />
   <style>
-    html, body { height: 100%; margin: 0; background: #050509; }
+    :root {
+      --bg: #050509;
+      --panel: #10131a;
+      --stroke: #2a3244;
+      --text: #e7f2ff;
+      --muted: #a6b1c2;
+      --accent: #9eb3d1;
+    }
+    html, body { height: 100%; margin: 0; background: var(--bg); }
     #app { position: fixed; inset: 0; }
     .brand {
-      position: fixed; left: 12px; top: 10px; color: #a6b1c2;
+      position: fixed; left: 12px; top: 10px; color: var(--muted);
       font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       user-select: none; opacity: 0.9;
     }
@@ -17,32 +25,36 @@
 
     .hud {
       position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 10;
-      display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e7f2ff;
+      display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text);
     }
-    .panel { background: #10131a; border: 1px solid #2a3244; border-radius: 8px; padding: 10px; }
-    .panel h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #9eb3d1; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--stroke); border-radius: 10px; padding: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    }
+    .panel h3 { margin: 0 0 8px; font-size: 12px; font-weight: 700; color: var(--accent); }
     .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
     .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .row4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; }
     select, button, input[type="range"] {
-      padding: 8px 10px; background: #11131a; color: #e7f2ff; border: 1px solid #2a3244; border-radius: 6px; cursor: pointer;
+      padding: 8px 10px; background: #11131a; color: var(--text); border: 1px solid var(--stroke); border-radius: 8px; cursor: pointer;
     }
     input[type="range"] { cursor: ew-resize; height: 28px; }
     button:hover, select:hover, input[type="range"]:hover { background: #161a23; }
-    .muted { opacity: 0.85; }
+    .muted { color: var(--muted); }
+    .spacer { height: 6px; }
   </style>
 
-  <!-- ESM polyfill so import maps work everywhere modern -->
+  <!-- ESM polyfill so import maps work broadly -->
   <script async src="https://unpkg.com/es-module-shims@2.6.2/dist/es-module-shims.js"></script>
 
-  <!-- Import map: three.js + lil-gui (optional) -->
+  <!-- Import map: three.js addons -->
   <script type="importmap">
   {
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.179.1/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/",
-      "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.20.0/dist/lil-gui.esm.js"
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.179.1/examples/jsm/"
     }
   }
   </script>
@@ -52,7 +64,7 @@
   <div class="brand">Psychedelic Origami — drag to orbit, wheel to zoom</div>
 
   <div class="hud">
-    <!-- Folding controls -->
+    <!-- Folding -->
     <div class="panel">
       <h3>Folding</h3>
       <div class="row">
@@ -63,43 +75,38 @@
         </select>
         <button id="btnApply">Apply</button>
       </div>
-      <div class="row2" style="margin-top:8px">
-        <label>Progress <input id="progress" type="range" min="0" max="1" step="0.001" value="0.65" /></label>
-        <label>Easing
-          <select id="easing">
-            <option value="linear">linear</option>
-            <option value="smoothstep" selected>smoothstep</option>
-            <option value="easeInOutCubic">easeInOutCubic</option>
-          </select>
+      <div class="spacer"></div>
+      <div class="row">
+        <label style="display:block">Progress
+          <input id="progress" type="range" min="0" max="1" step="0.001" value="0.65" style="width:100%" />
         </label>
-      </div>
-      <div class="row2" style="margin-top:8px">
-        <div class="row" style="gap:6px">
-          <button id="btnPlay">Play</button>
-          <button id="btnReset">Reset</button>
-        </div>
         <button id="btnSnap">Save PNG</button>
       </div>
-      <div class="muted" style="margin-top:6px">Play animates the fold; Progress scrubs when paused.</div>
+      <div class="muted" style="margin-top:6px">Slide <b>Progress</b> to fold/unfold. (Valley = +°, Mountain = −°.)</div>
     </div>
 
-    <!-- Global animation (affects folds + shader) -->
+    <!-- Animation -->
     <div class="panel">
-      <h3>Global Animation</h3>
+      <h3>Animation</h3>
       <div class="row">
-        <label>Global Speed <input id="globalSpeed" type="range" min="0" max="3" step="0.01" value="1.0" /></label>
+        <label style="display:block">Global Speed
+          <input id="globalSpeed" type="range" min="0" max="3" step="0.01" value="1.0" style="width:100%" />
+        </label>
         <select id="shaderAuto">
-          <option value="off">Auto: off</option>
-          <option value="on" selected>Auto: on</option>
+          <option value="off">Auto Effects: off</option>
+          <option value="on" selected>Auto Effects: on</option>
         </select>
       </div>
-      <div class="muted">Global Speed multiplies <b>all</b> animation rates. Per‑parameter sliders below control <b>speed variation</b>.</div>
-    </div>
 
-    <!-- Shader animation controls (speed variation) -->
-    <div class="panel">
-      <h3>Shader Animation (speed variation)</h3>
+      <div class="spacer"></div>
+      <div class="row">
+        <label style="display:block">Kaleido Sectors
+          <input id="sectors" type="range" min="3" max="24" step="1" value="10" style="width:100%" />
+        </label>
+        <span></span>
+      </div>
 
+      <div class="spacer"></div>
       <div class="row3">
         <label>Hue Base  <input id="hueBase"  type="range" min="0" max="1" step="0.001" value="0.05" /></label>
         <label>Hue Amp   <input id="hueAmp"   type="range" min="0" max="1" step="0.001" value="0.25" /></label>
@@ -125,9 +132,9 @@
       </div>
     </div>
 
-    <!-- Surface controls -->
+    <!-- Surface -->
     <div class="panel">
-      <h3>Surface (Reflections & Highlights)</h3>
+      <h3>Surface</h3>
       <div class="row3">
         <label>Spec Intensity <input id="specInt" type="range" min="0" max="2" step="0.01" value="0.7" /></label>
         <label>Spec Power     <input id="specPow" type="range" min="1" max="64" step="1" value="24" /></label>
@@ -141,8 +148,8 @@
     </div>
   </div>
 
-  <!-- IMPORTANT: version query helps bust caches on GitHub Pages -->
-  <script type="module" src="./main.js?v=3"></script>
+  <!-- Cache-bust the module on GitHub Pages by bumping ?v= -->
+  <script type="module" src="./main.js?v=8"></script>
   <noscript>This page needs JavaScript enabled.</noscript>
 </body>
 </html>
