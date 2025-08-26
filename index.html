@@ -3,62 +3,64 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Psychedelic Origami — Compact, Fully Controllable</title>
+  <title>Psychedelic Origami — Labeled, Controllable</title>
   <meta name="theme-color" content="#050509" />
   <style>
-    :root {
+    :root{
       --bg:#050509; --panel:#10131a; --stroke:#2a3244; --text:#e7f2ff; --muted:#9aa7bf; --accent:#9eb3d1;
       --toolbar-h:56px;
     }
-    html, body { height:100%; margin:0; background:var(--bg); color:var(--text); }
-    #app { position:fixed; inset:0; }
-    .brand {
-      position:fixed; left:10px; top:8px; color:var(--muted);
-      font:12px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; user-select:none; opacity:.9;
-    }
-    @media (max-width:700px){ .brand{ display:none; } }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);}
+    #app{position:fixed;inset:0;}
+    .brand{position:fixed;left:10px;top:8px;color:var(--muted);font:12px/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;user-select:none;opacity:.9;}
+    @media (max-width:720px){.brand{display:none;}}
 
-    /* Compact toolbar */
-    .toolbar {
-      position:fixed; left:12px; right:12px; bottom:12px; height:var(--toolbar-h);
-      display:grid; grid-template-columns:auto 1fr auto auto auto auto; gap:8px; align-items:center;
-      padding:8px 10px; background:var(--panel); border:1px solid var(--stroke); border-radius:12px;
-      box-shadow:0 10px 28px rgba(0,0,0,.35); z-index:20;
+    /* Compact single-row toolbar with labeled ranges (no overlap) */
+    .toolbar{
+      position:fixed;left:12px;right:12px;bottom:12px;height:var(--toolbar-h);
+      display:grid;grid-template-columns:auto minmax(280px,1fr) minmax(200px,0.6fr) auto auto auto;
+      gap:10px;align-items:center;padding:8px 10px;background:var(--panel);
+      border:1px solid var(--stroke);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.35);z-index:20;
     }
-    .toolbar select, .toolbar button, .toolbar input[type="range"] {
-      height:32px; background:#11131a; border:1px solid var(--stroke); color:var(--text);
-      border-radius:8px; padding:0 10px; outline:none;
-    }
-    .toolbar input[type="range"]{ cursor:ew-resize; }
-    .toolbar .progress{ width:clamp(200px,48vw,900px); }
-    .toolbar .speed{ width:clamp(120px,16vw,240px); }
-    .btn-icon{ display:grid; place-items:center; width:36px; aspect-ratio:1/1; padding:0; }
-    .btn-icon svg{ width:18px; height:18px; fill:#c9d6f0; opacity:.9; }
-    .btn-icon:hover{ background:#161a23; }
+    .toolbar select,.toolbar button{height:32px;background:#11131a;border:1px solid var(--stroke);color:var(--text);border-radius:8px;padding:0 10px;outline:none;}
+    .tool.range{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;min-width:0;}
+    .tool.range label{font:11px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);white-space:nowrap;}
+    .tool.range input[type=range]{height:32px;background:#11131a;border:1px solid var(--stroke);border-radius:8px;outline:none;cursor:ew-resize;width:100%;}
+    .tool.range output{min-width:48px;text-align:right;padding:4px 6px;border:1px solid var(--stroke);border-radius:6px;background:#0f1219;font:12px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cfe0ff;}
+    .check{display:flex;align-items:center;gap:6px;font:12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);}
+    .btn-icon{display:grid;place-items:center;width:36px;aspect-ratio:1/1;padding:0;background:#11131a;border:1px solid var(--stroke);border-radius:8px;}
+    .btn-icon svg{width:18px;height:18px;fill:#c9d6f0;opacity:.9;}
+    .btn-icon:hover{background:#161a23;}
 
-    /* Drawer */
+    /* Advanced drawer with clear, labeled triplets */
     details.drawer{
-      position:fixed; left:12px; right:12px; bottom:calc(12px + var(--toolbar-h) + 8px);
-      max-height:min(62vh,480px); overflow:auto; z-index:19;
-      background:var(--panel); border:1px solid var(--stroke); border-radius:12px; padding:12px;
-      box-shadow:0 16px 48px rgba(0,0,0,.45);
+      position:fixed;left:12px;right:12px;bottom:calc(12px + var(--toolbar-h) + 8px);
+      max-height:min(64vh,520px);overflow:auto;z-index:19;background:var(--panel);
+      border:1px solid var(--stroke);border-radius:12px;padding:12px;box-shadow:0 16px 48px rgba(0,0,0,.45);
     }
-    details.drawer[open]{ animation:pop .12s ease-out; }
-    @keyframes pop{ from{ transform:translateY(8px); opacity:.0; } to{ transform:translateY(0); opacity:1; } }
-    details.drawer > summary{ display:none; } /* a11y anchor, toggled programmatically */
+    details.drawer[open]{animation:pop .12s ease-out;}
+    @keyframes pop{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+    details.drawer>summary{display:none;}
+    .grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
+    .card{border:1px solid var(--stroke);border-radius:10px;padding:10px;background:#0f1219;}
+    .card h4{margin:0 0 8px;color:var(--accent);font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
 
-    .grid{ display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
-    .card{ border:1px solid var(--stroke); border-radius:10px; padding:10px; background:#0f1219; }
-    .card h4{ margin:0 0 8px; color:var(--accent); font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-    .row3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
-    .row { display:grid; grid-template-columns:1fr; gap:8px; }
-    .sr{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    /* A triple = Base, Amount, Speed — each is a 3-col “ctrl” row to prevent overlap */
+    .triple{display:grid;gap:8px;grid-template-columns:1fr;}
+    .ctrl{display:grid;grid-template-columns:64px 1fr 58px;gap:8px;align-items:center;min-width:0;}
+    .ctrl label{font:11px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);white-space:nowrap;}
+    .ctrl input[type=range]{height:32px;background:#11131a;border:1px solid var(--stroke);border-radius:8px;outline:none;cursor:ew-resize;width:100%;}
+    .ctrl output{min-width:58px;text-align:right;padding:4px 6px;border:1px solid var(--stroke);border-radius:6px;background:#0f1219;font:12px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cfe0ff;}
+    /* On wider screens, place the 3 ctrl rows side-by-side */
+    @media (min-width:980px){
+      .triple{grid-template-columns:repeat(3,minmax(220px,1fr));}
+    }
   </style>
 
-  <!-- Polyfill so import maps work broadly -->
+  <!-- Import maps polyfill -->
   <script async src="https://unpkg.com/es-module-shims@2.6.2/dist/es-module-shims.js"></script>
 
-  <!-- Import map: three.js addons -->
+  <!-- Import map -->
   <script type="importmap">
   {
     "imports": {
@@ -72,115 +74,221 @@
   <div id="app"></div>
   <div class="brand">Psychedelic Origami — drag to orbit, wheel to zoom</div>
 
-  <!-- Toolbar -->
-  <div class="toolbar" role="group" aria-label="Controls">
+  <!-- Toolbar: one row, all labeled -->
+  <div class="toolbar" role="group" aria-label="Main controls">
     <select id="preset" aria-label="Preset">
       <option value="half-vertical-valley">Half Vertical</option>
       <option value="diagonal-valley">Diagonal</option>
       <option value="gate-valley">Gate (2× Valley)</option>
     </select>
 
-    <input id="progress" class="progress" type="range" min="0" max="1" step="0.001" value="0.65" aria-label="Fold progress" />
+    <div class="tool range" aria-label="Folding progress">
+      <label for="progress">Fold</label>
+      <input id="progress" type="range" min="0" max="1" step="0.001" value="0.65" />
+      <output id="progressOut" for="progress">0.65</output>
+    </div>
 
-    <input id="globalSpeed" class="speed" type="range" min="0" max="3" step="0.01" value="1.00" aria-label="Global animation speed" />
+    <div class="tool range" aria-label="Global animation speed">
+      <label for="globalSpeed">Speed</label>
+      <input id="globalSpeed" type="range" min="0" max="3" step="0.01" value="1.00" />
+      <output id="globalSpeedOut" for="globalSpeed">1.00</output>
+    </div>
 
-    <select id="shaderAuto" aria-label="Auto effects">
-      <option value="off">Auto FX: off</option>
-      <option value="on" selected>Auto FX: on</option>
-    </select>
+    <label class="check" for="autoFx"><input id="autoFx" type="checkbox" checked /> Auto FX</label>
 
     <button id="btnMore" class="btn-icon" aria-label="Advanced controls" aria-expanded="false" aria-controls="drawer">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.94-3.5a.75.75 0 0 1 .06 1.5l-2.11.16a7.99 7.99 0 0 1-.88 2.12l1.33 1.68a.75.75 0 1 1-1.18.94l-1.52-1.51a8.03 8.03 0 0 1-2.14.88l-.15 2.11a.75.75 0 0 1-1.5.06l-.16-2.11a7.99 7.99 0 0 1-2.12-.88l-1.68 1.33a.75.75 0 0 1-.94-1.18l1.51-1.52a8.03 8.03 0 0 1-.88-2.14l-2.11-.15a.75.75 0 0 1-.06-1.5l2.11-.16c.17-.77.46-1.49.88-2.12L5.3 7.88a.75.75 0 0 1 1.18-.94l1.52 1.51c.63-.42 1.35-.7 2.12-.88l.15-2.11a.75.75 0 0 1 1.5-.06l.16 2.11c.77.17 1.49.46 2.12.88l1.68-1.33a.75.75 0 1 1 .94 1.18l-1.51 1.52c.42.63.7 1.35.88 2.12l2.11.15Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.94-3.5a.75.75 0 0 1 .06 1.5l-2.11.16a7.99 7.99 0 0 1-.88 2.12l1.33 1.68a.75.75 0 1 1-1.18.94l-1.52-1.51a8.03 8.03 0 0 1-2.14.88l-.15 2.11a.75.75 0 0 1-1.5.06l-.16-2.11a7.99 7.99 0 0 1-2.12-.88l-1.68 1.33a.75.75 0 0 1-.94-1.18l1.51-1.52c.42.63.7 1.35.88 2.12l2.11.15Z"/></svg>
     </button>
 
     <button id="btnSnap" class="btn-icon" aria-label="Save PNG">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3H7a2 2 0 0 0-2 2v4h2V5h10v4h2V5a2 2 0 0 0-2-2ZM5 19a2 2 0 0 0 2 2h10a2 2 2 0 0 0 2-2v-7H5v7Zm6-6h2v5h-2v-5Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3H7a2 2 0 0 0-2 2v4h2V5h10v4h2V5a2 2 0 0 0-2-2ZM5 19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7H5v7Zm6-6h2v5h-2v-5Z"/></svg>
     </button>
   </div>
 
-  <!-- Advanced Drawer -->
-  <details id="drawer" class="drawer">
+  <!-- Advanced drawer -->
+  <details id="drawer" class="drawer" aria-label="Advanced controls">
     <summary>Advanced</summary>
     <div class="grid">
+
       <div class="card">
         <h4>Pattern</h4>
-        <div class="row">
-          <label class="sr" for="sectors">Kaleidoscope sectors</label>
+        <div class="ctrl">
+          <label for="sectors">Sectors</label>
           <input id="sectors" type="range" min="3" max="24" step="1" value="10" />
+          <output id="sectorsOut" for="sectors">10</output>
         </div>
       </div>
 
       <div class="card">
-        <h4>Hue Cycle</h4>
-        <div class="row3">
-          <label class="sr" for="hueBase">Hue Base</label>
-          <input id="hueBase"  type="range" min="0" max="1" step="0.001" value="0.05" />
-          <label class="sr" for="hueAmp">Hue Amount</label>
-          <input id="hueAmp"   type="range" min="0" max="1" step="0.001" value="0.25" />
-          <label class="sr" for="hueSpeed">Hue Speed</label>
-          <input id="hueSpeed" type="range" min="0" max="2" step="0.01"  value="0.35" />
+        <h4>Hue</h4>
+        <div class="triple" role="group" aria-labelledby="hue">
+          <div class="ctrl">
+            <label for="hueBase">Base</label>
+            <input id="hueBase" type="range" min="0" max="1" step="0.001" value="0.05" />
+            <output id="hueBaseOut" for="hueBase">0.05</output>
+          </div>
+          <div class="ctrl">
+            <label for="hueAmp">Amount</label>
+            <input id="hueAmp" type="range" min="0" max="1" step="0.001" value="0.25" />
+            <output id="hueAmpOut" for="hueAmp">0.25</output>
+          </div>
+          <div class="ctrl">
+            <label for="hueSpeed">Speed</label>
+            <input id="hueSpeed" type="range" min="0" max="2" step="0.01" value="0.35" />
+            <output id="hueSpeedOut" for="hueSpeed">0.35</output>
+          </div>
         </div>
       </div>
 
       <div class="card">
-        <h4>Film Thickness (nm)</h4>
-        <div class="row3">
-          <input id="filmBase"  type="range" min="100" max="800" step="1"   value="360" />
-          <input id="filmAmp"   type="range" min="0"   max="300" step="1"   value="140" />
-          <input id="filmSpeed" type="range" min="0"   max="2"   step="0.01" value="0.25" />
+        <h4>Film (nm)</h4>
+        <div class="triple">
+          <div class="ctrl">
+            <label for="filmBase">Base</label>
+            <input id="filmBase" type="range" min="100" max="800" step="1" value="360" />
+            <output id="filmBaseOut" for="filmBase">360</output>
+          </div>
+          <div class="ctrl">
+            <label for="filmAmp">Amount</label>
+            <input id="filmAmp" type="range" min="0" max="300" step="1" value="140" />
+            <output id="filmAmpOut" for="filmAmp">140</output>
+          </div>
+          <div class="ctrl">
+            <label for="filmSpeed">Speed</label>
+            <input id="filmSpeed" type="range" min="0" max="2" step="0.01" value="0.25" />
+            <output id="filmSpeedOut" for="filmSpeed">0.25</output>
+          </div>
         </div>
       </div>
 
       <div class="card">
         <h4>Edge Glow</h4>
-        <div class="row3">
-          <input id="edgeBase"  type="range" min="0" max="2"   step="0.01" value="0.70" />
-          <input id="edgeAmp"   type="range" min="0" max="2"   step="0.01" value="0.35" />
-          <input id="edgeSpeed" type="range" min="0" max="2"   step="0.01" value="0.22" />
+        <div class="triple">
+          <div class="ctrl">
+            <label for="edgeBase">Base</label>
+            <input id="edgeBase" type="range" min="0" max="2" step="0.01" value="0.70" />
+            <output id="edgeBaseOut" for="edgeBase">0.70</output>
+          </div>
+          <div class="ctrl">
+            <label for="edgeAmp">Amount</label>
+            <input id="edgeAmp" type="range" min="0" max="2" step="0.01" value="0.35" />
+            <output id="edgeAmpOut" for="edgeAmp">0.35</output>
+          </div>
+          <div class="ctrl">
+            <label for="edgeSpeed">Speed</label>
+            <input id="edgeSpeed" type="range" min="0" max="2" step="0.01" value="0.22" />
+            <output id="edgeSpeedOut" for="edgeSpeed">0.22</output>
+          </div>
         </div>
       </div>
 
       <div class="card">
         <h4>Reflectivity</h4>
-        <div class="row3">
-          <input id="reflBase"  type="range" min="0" max="1"   step="0.01" value="0.25" />
-          <input id="reflAmp"   type="range" min="0" max="1"   step="0.01" value="0.25" />
-          <input id="reflSpeed" type="range" min="0" max="2"   step="0.01" value="0.18" />
+        <div class="triple">
+          <div class="ctrl">
+            <label for="reflBase">Base</label>
+            <input id="reflBase" type="range" min="0" max="1" step="0.01" value="0.25" />
+            <output id="reflBaseOut" for="reflBase">0.25</output>
+          </div>
+          <div class="ctrl">
+            <label for="reflAmp">Amount</label>
+            <input id="reflAmp" type="range" min="0" max="1" step="0.01" value="0.25" />
+            <output id="reflAmpOut" for="reflAmp">0.25</output>
+          </div>
+          <div class="ctrl">
+            <label for="reflSpeed">Speed</label>
+            <input id="reflSpeed" type="range" min="0" max="2" step="0.01" value="0.18" />
+            <output id="reflSpeedOut" for="reflSpeed">0.18</output>
+          </div>
         </div>
       </div>
 
       <div class="card">
-        <h4>Specular & Rim</h4>
-        <div class="row3">
-          <input id="specBase"  type="range" min="0" max="2"   step="0.01" value="0.70" />
-          <input id="specAmp"   type="range" min="0" max="2"   step="0.01" value="0.20" />
-          <input id="specSpeed" type="range" min="0" max="2"   step="0.01" value="0.30" />
+        <h4>Specular</h4>
+        <div class="triple">
+          <div class="ctrl">
+            <label for="specBase">Base</label>
+            <input id="specBase" type="range" min="0" max="2" step="0.01" value="0.70" />
+            <output id="specBaseOut" for="specBase">0.70</output>
+          </div>
+          <div class="ctrl">
+            <label for="specAmp">Amount</label>
+            <input id="specAmp" type="range" min="0" max="2" step="0.01" value="0.20" />
+            <output id="specAmpOut" for="specAmp">0.20</output>
+          </div>
+          <div class="ctrl">
+            <label for="specSpeed">Speed</label>
+            <input id="specSpeed" type="range" min="0" max="2" step="0.01" value="0.30" />
+            <output id="specSpeedOut" for="specSpeed">0.30</output>
+          </div>
         </div>
-        <div class="row3" style="margin-top:8px">
-          <input id="rimBase"   type="range" min="0" max="2"   step="0.01" value="0.50" />
-          <input id="rimAmp"    type="range" min="0" max="2"   step="0.01" value="0.15" />
-          <input id="rimSpeed"  type="range" min="0" max="2"   step="0.01" value="0.26" />
+      </div>
+
+      <div class="card">
+        <h4>Rim</h4>
+        <div class="triple">
+          <div class="ctrl">
+            <label for="rimBase">Base</label>
+            <input id="rimBase" type="range" min="0" max="2" step="0.01" value="0.50" />
+            <output id="rimBaseOut" for="rimBase">0.50</output>
+          </div>
+          <div class="ctrl">
+            <label for="rimAmp">Amount</label>
+            <input id="rimAmp" type="range" min="0" max="2" step="0.01" value="0.15" />
+            <output id="rimAmpOut" for="rimAmp">0.15</output>
+          </div>
+          <div class="ctrl">
+            <label for="rimSpeed">Speed</label>
+            <input id="rimSpeed" type="range" min="0" max="2" step="0.01" value="0.26" />
+            <output id="rimSpeedOut" for="rimSpeed">0.26</output>
+          </div>
         </div>
       </div>
 
       <div class="card">
         <h4>Bloom</h4>
-        <div class="row3">
-          <input id="bloomBase"  type="range" min="0"   max="2.5" step="0.01" value="0.35" />
-          <input id="bloomAmp"   type="range" min="0"   max="2.0" step="0.01" value="0.10" />
-          <input id="bloomSpeed" type="range" min="0"   max="2.0" step="0.01" value="0.20" />
+        <div class="triple">
+          <div class="ctrl">
+            <label for="bloomBase">Strength</label>
+            <input id="bloomBase" type="range" min="0" max="2.5" step="0.01" value="0.35" />
+            <output id="bloomBaseOut" for="bloomBase">0.35</output>
+          </div>
+          <div class="ctrl">
+            <label for="bloomAmp">Amount</label>
+            <input id="bloomAmp" type="range" min="0" max="2" step="0.01" value="0.10" />
+            <output id="bloomAmpOut" for="bloomAmp">0.10</output>
+          </div>
+          <div class="ctrl">
+            <label for="bloomSpeed">Speed</label>
+            <input id="bloomSpeed" type="range" min="0" max="2" step="0.01" value="0.20" />
+            <output id="bloomSpeedOut" for="bloomSpeed">0.20</output>
+          </div>
         </div>
-        <div class="row3" style="margin-top:8px">
-          <input id="bloomRadBase"  type="range" min="0" max="1.5" step="0.01" value="0.60" />
-          <input id="bloomRadAmp"   type="range" min="0" max="1.5" step="0.01" value="0.10" />
-          <input id="bloomRadSpeed" type="range" min="0" max="2.0" step="0.01" value="0.18" />
+
+        <div class="triple" style="margin-top:8px">
+          <div class="ctrl">
+            <label for="bloomRadBase">Radius</label>
+            <input id="bloomRadBase" type="range" min="0" max="1.5" step="0.01" value="0.60" />
+            <output id="bloomRadBaseOut" for="bloomRadBase">0.60</output>
+          </div>
+          <div class="ctrl">
+            <label for="bloomRadAmp">Amount</label>
+            <input id="bloomRadAmp" type="range" min="0" max="1.5" step="0.01" value="0.10" />
+            <output id="bloomRadAmpOut" for="bloomRadAmp">0.10</output>
+          </div>
+          <div class="ctrl">
+            <label for="bloomRadSpeed">Speed</label>
+            <input id="bloomRadSpeed" type="range" min="0" max="2" step="0.01" value="0.18" />
+            <output id="bloomRadSpeedOut" for="bloomRadSpeed">0.18</output>
+          </div>
         </div>
       </div>
+
     </div>
   </details>
 
-  <!-- Cache-bust on GitHub Pages by bumping ?v= -->
-  <script type="module" src="./main.js?v=10"></script>
+  <!-- Cache-bust on Pages with ?v= -->
+  <script type="module" src="./main.js?v=11"></script>
   <noscript>This page needs JavaScript enabled.</noscript>
 </body>
 </html>
