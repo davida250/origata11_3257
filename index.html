@@ -9,6 +9,7 @@
     :root{
       --bg:#050509; --panel:#10131a; --stroke:#2a3244; --text:#e7f2ff; --muted:#9aa7bf; --accent:#9eb3d1;
       --toolbar-h:56px;
+      --blue:#1e66ff; --blue-hover:#2a77ff; --blue-border:#144ad4;
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--text);}
     #app{position:fixed;inset:0;}
@@ -28,9 +29,14 @@
     .tool.range input[type=range]{height:32px;background:#11131a;border:1px solid var(--stroke);border-radius:8px;outline:none;cursor:ew-resize;width:100%;}
     .tool.range output{min-width:64px;text-align:right;padding:4px 6px;border:1px solid var(--stroke);border-radius:6px;background:#0f1219;font:12px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cfe0ff;}
     .check{display:flex;align-items:center;gap:6px;font:12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);}
-    .btn-icon{display:grid;place-items:center;width:36px;aspect-ratio:1/1;padding:0;background:#11131a;border:1px solid var(--stroke);border-radius:8px;}
-    .btn-icon svg{width:18px;height:18px;fill:#c9d6f0;opacity:.9;}
+    .btn-icon{display:grid;place-items:center;width:36px;aspect-ratio:1/1;padding:0;background:#11131a;border:1px solid var(--stroke);border-radius:8px;transition:background .25s,border-color .25s;}
+    .btn-icon svg{width:18px;height:18px;fill:#c9d6f0;opacity:.95;transition:fill .25s;}
     .btn-icon:hover{background:#161a23;}
+
+    /* Make ONLY the expand button blue */
+    #btnMore{ background:var(--blue); border-color:var(--blue-border); }
+    #btnMore:hover{ background:var(--blue-hover); }
+    #btnMore svg{ fill:#eef3ff; }
 
     /* Advanced drawer */
     details.drawer{
@@ -56,6 +62,7 @@
     .pair label{font:11px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);white-space:nowrap;}
     .pair input[type=range]{height:32px;background:#11131a;border:1px solid var(--stroke);border-radius:8px;outline:none;cursor:ew-resize;width:100%;}
     .pair output{min-width:64px;text-align:right;padding:4px 6px;border:1px solid var(--stroke);border-radius:6px;background:#0f1219;font:12px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cfe0ff;}
+    .pair select{height:32px;background:#11131a;border:1px solid var(--stroke);color:var(--text);border-radius:8px;padding:0 10px;outline:none;}
   </style>
 
   <!-- Import maps polyfill -->
@@ -80,7 +87,7 @@
     <select id="preset" aria-label="Preset">
       <option value="half-vertical-valley">Half Vertical</option>
       <option value="diagonal-valley">Diagonal</option>
-      <option value="gate-valley">Gate (2× Valley)</option>
+      <option value="gate-valley">Gate</option>
     </select>
 
     <div class="tool range" aria-label="Folding progress">
@@ -91,14 +98,14 @@
 
     <div class="tool range" aria-label="Global animation speed">
       <label for="globalSpeed">Speed</label>
-      <input id="globalSpeed" type="range" min="0" max="30" step="0.01" value="1.00" />
+      <input id="globalSpeed" type="range" min="0" max="3" step="0.01" value="1.00" />
       <output id="globalSpeedOut" for="globalSpeed">1.00</output>
     </div>
 
-    <label class="check" for="autoFx"><input id="autoFx" type="checkbox" checked /> Auto FX</label>
+    <label class="check" for="autoFx"><input id="autoFx" type="checkbox" checked /> Auto FX</label>
 
     <button id="btnMore" class="btn-icon" aria-label="Advanced controls" aria-expanded="false" aria-controls="drawer">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.94-3.5a.75.75 0 0 1 .06 1.5l-2.11.16a7.99 7.99 0 0 1-.88 2.12l1.33 1.68a.75.75 0 1 1-1.18.94l-1.52-1.51a8.03 8.03 0 0 1-2.14.88l-.15 2.11a.75.75 0  0 1-1.5.06l-.16-2.11a7.99 7.99 0 0 1-2.12-.88l-1.68 1.33a.75.75 0  1 1-.94-1.18l-1.51 1.52c.42.63.7 1.35.88 2.12l2.11.15Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.94-3.5a.75.75 0 0 1 .06 1.5l-2.11.16a7.99 7.99 0 0 1-.88 2.12l1.33 1.68a.75.75 0 1 1-1.18.94l-1.52-1.51a8.03 8.03 0 0 1-2.14.88l-.15 2.11a.75.75 0 0 1-1.5.06l-.16-2.11a7.99 7.99 0 0 1-2.12-.88l-1.68 1.33a.75.75 0 1 1-.94 1.18l-1.51-1.52c.42.63.7 1.35.88 2.12l2.11.15Z"/></svg>
     </button>
 
     <button id="btnSnap" class="btn-icon" aria-label="Save PNG">
@@ -118,8 +125,31 @@
           <input id="sectors" type="range" min="3" max="24" step="1" value="10" />
           <output id="sectorsOut" for="sectors">10</output>
 
-          <!-- placeholder row to keep grid even (Amount/Speed pairs elsewhere) -->
+          <!-- padding row -->
           <label style="opacity:.4"> </label><div></div><div></div>
+        </div>
+      </div>
+
+      <!-- NEW: Texture selection + Amount/Speed -->
+      <div class="card">
+        <h4>Texture</h4>
+        <div class="pair">
+          <label for="texMode">Type</label>
+          <select id="texMode">
+            <option value="0">Psychedelic</option>
+            <option value="1">Rice Paper</option>
+            <option value="2">Marble</option>
+            <option value="3">Stripes</option>
+          </select>
+          <output aria-hidden="true"> </output>
+
+          <label for="texAmp">Amount</label>
+          <input id="texAmp" type="range" min="0" max="1" step="0.01" value="0.50" />
+          <output id="texAmpOut" for="texAmp">0.50</output>
+
+          <label for="texSpeed">Speed</label>
+          <input id="texSpeed" type="range" min="0" max="2" step="0.01" value="0.60" />
+          <output id="texSpeedOut" for="texSpeed">0.60</output>
         </div>
       </div>
 
@@ -127,7 +157,7 @@
         <h4>Hue</h4>
         <div class="pair">
           <label for="hueAmp">Amount</label>
-          <input id="hueAmp" type="range" min="0" max="1" step="0.001" value="0.25" />
+          <input id="hueAmp" type="range" min="0" max="1" step="0.01" value="0.25" />
           <output id="hueAmpOut" for="hueAmp">0.25</output>
 
           <label for="hueSpeed">Speed</label>
@@ -231,7 +261,7 @@
   </details>
 
   <!-- Cache-bust on Pages with ?v= -->
-  <script type="module" src="./main.js?v=12"></script>
+  <script type="module" src="./main.js?v=13"></script>
   <noscript>This page needs JavaScript enabled.</noscript>
 </body>
 </html>
