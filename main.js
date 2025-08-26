@@ -1,14 +1,11 @@
 /**
- * Origami — 3 Presets (No File Loads)
+ * Origami — 3 Presets (Paper-like, No File Loads)
  *
  * 1) Half Vertical (Valley)   — simple working fold
  * 2) Diagonal (Valley)        — simple working fold
- * 3) Flapping Bird (built-in) — embedded low-poly origami-style bird with animated wings
+ * 3) Flapping Bird            — built-in crease pattern using the same folding engine
  *
- * Notes:
- * - The fold engine uses a tiny uniform budget (MAX_CREASES=2), so it renders reliably everywhere.
- * - Valley = +°, Mountain = −° (same sign convention as Origami Simulator’s FOLD docs). 
- *   See: "fold angle is positive for valley folds, negative for mountain folds".  [origamisimulator.org → Design Tips] 
+ * Conventions: Valley = +°, Mountain = −° (Origami Simulator’s fold-angle sign).  See docs. 
  */
 
 import * as THREE from 'three';
@@ -45,41 +42,47 @@ composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.3, 0.6, 0.2);
 composer.addPass(bloom);
 const fxaa = new ShaderPass(FXAAShader);
-fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.height || 1 / window.innerHeight);
+fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.innerHeight);
 composer.addPass(fxaa);
 composer.addPass(new OutputPass());
 
-// ---------- Paper sheet for fold presets ----------
+// ---------- Paper sheet ----------
 const SIZE = 3.0;
 const SEG = 160;
 const sheetGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
 sheetGeo.rotateX(-0.25);
 
 // ---------- Math helpers ----------
-const tmp = { v: new THREE.Vector3() };
+const tmp = { v: new THREE.Vector3(), u: new THREE.Vector3() };
 function sdLine2(p, a, d){ const px=p.x-a.x, py=p.y-a.y; return d.x*py - d.y*px; }
 function rotPointAroundAxis(p, a, axisUnit, ang){ tmp.v.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a); p.copy(tmp.v); }
 function rotVecAxis(v, axisUnit, ang){ v.applyAxisAngle(axisUnit, ang); }
 function clamp01(x){ return x<0?0:x>1?1:x; }
 
-// ---------- Minimal crease engine ----------
-const MAX_CREASES = 2;
+// ---------- Crease engine with small mask budget ----------
+const MAX_CREASES = 6;
+const MAX_MASKS_PER = 2;
 const VALLEY = +1, MOUNTAIN = -1;
 
 const base = {
   count: 0,
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
-  amp:  new Array(MAX_CREASES).fill(0),   // |angle| in radians
-  sign: new Array(MAX_CREASES).fill(1)    // +1 valley, -1 mountain
+  amp:  new Array(MAX_CREASES).fill(0),     // |angle| in radians
+  sign: new Array(MAX_CREASES).fill(1),     // +1 valley, -1 mountain
+  mCount: new Array(MAX_CREASES).fill(0),
+  mA: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
+  mD: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0)))
 };
 function resetBase(){
   base.count=0;
   for (let i=0;i<MAX_CREASES;i++){
-    base.A[i].set(0,0,0); base.D[i].set(1,0,0); base.amp[i]=0; base.sign[i]=1;
+    base.A[i].set(0,0,0); base.D[i].set(1,0,0);
+    base.amp[i]=0; base.sign[i]=1; base.mCount[i]=0;
+    for (let m=0;m<MAX_MASKS_PER;m++){ base.mA[i][m].set(0,0,0); base.mD[i][m].set(1,0,0); }
   }
 }
-function addCrease({ Ax=0, Ay=0, Dx=1, Dy=0, deg=180, sign=VALLEY }){
+function addCrease({ Ax=0, Ay=0, Dx=1, Dy=0, deg=180, sign=VALLEY, masks=[] }){
   if (base.count >= MAX_CREASES) return;
   const i = base.count++;
   const d = new THREE.Vector2(Dx, Dy).normalize();
@@ -87,34 +90,54 @@ function addCrease({ Ax=0, Ay=0, Dx=1, Dy=0, deg=180, sign=VALLEY }){
   base.D[i].set(d.x, d.y, 0);
   base.amp[i]  = THREE.MathUtils.degToRad(Math.max(0, Math.min(180, Math.abs(deg))));
   base.sign[i] = sign >= 0 ? VALLEY : MOUNTAIN;
+  base.mCount[i] = Math.min(MAX_MASKS_PER, masks.length);
+  for (let m=0;m<base.mCount[i];m++){
+    const mk = masks[m]; const dd = new THREE.Vector2(mk.Dx, mk.Dy).normalize();
+    base.mA[i][m].set(mk.Ax, mk.Ay, 0);
+    base.mD[i][m].set(dd.x, dd.y, 0);
+  }
 }
 
 const eff = {
   A: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3()),
   D: Array.from({ length: MAX_CREASES }, () => new THREE.Vector3(1,0,0)),
-  ang: new Float32Array(MAX_CREASES)
+  ang: new Float32Array(MAX_CREASES),
+  mCount: new Int32Array(MAX_CREASES),
+  mA: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3())),
+  mD: Array.from({ length: MAX_CREASES }, () => Array.from({ length: MAX_MASKS_PER }, () => new THREE.Vector3(1,0,0)))
 };
-const drive = { play:false, progress:0.7, speed:0.9 };
+const drive = { play:false, progress:0.7, speed:1.0 };
 
-function computeAngles(tSec){
-  const t = drive.play ? (0.5 + 0.5*Math.sin(tSec*drive.speed)) : drive.progress;
-  for (let i=0;i<base.count;i++){
-    eff.ang[i] = base.sign[i] * base.amp[i] * clamp01(t);
-  }
-  for (let i=base.count;i<MAX_CREASES;i++) eff.ang[i]=0;
-}
 function computeFrames(){
-  for (let i=0;i<base.count;i++){ eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize(); }
+  // start from base frames
+  for (let i=0;i<base.count;i++){
+    eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize();
+    eff.mCount[i] = base.mCount[i];
+    for (let m=0;m<MAX_MASKS_PER;m++){
+      eff.mA[i][m].copy(base.mA[i][m]); eff.mD[i][m].copy(base.mD[i][m]).normalize();
+    }
+  }
+  // sequential propagation of earlier folds
   for (let j=0;j<base.count;j++){
-    const Aj=eff.A[j], Dj=eff.D[j].clone().normalize(), ang=eff.ang[j]; if (Math.abs(ang)<1e-7) continue;
+    const Aj = eff.A[j]; const Dj = eff.D[j].clone().normalize(); const ang = eff.ang[j]; if (Math.abs(ang)<1e-7) continue;
     for (let k=j+1;k<base.count;k++){
       const sd = sdLine2(eff.A[k], Aj, Dj);
-      if (sd > 0.0){ rotPointAroundAxis(eff.A[k], Aj, Dj, ang); rotVecAxis(eff.D[k], Dj, ang); eff.D[k].normalize(); }
+      if (sd > 0.0){
+        rotPointAroundAxis(eff.A[k], Aj, Dj, ang);
+        rotVecAxis(eff.D[k], Dj, ang); eff.D[k].normalize();
+        for (let m=0;m<MAX_MASKS_PER;m++){
+          const sdM = sdLine2(eff.mA[k][m], Aj, Dj);
+          if (sdM > 0.0){
+            rotPointAroundAxis(eff.mA[k][m], Aj, Dj, ang);
+            rotVecAxis(eff.mD[k][m], Dj, ang); eff.mD[k][m].normalize();
+          }
+        }
+      }
     }
   }
 }
 
-// ---------- Uniforms + Shaders ----------
+// ---------- Uniforms (folding + shader look) ----------
 const uniforms = {
   uTime:       { value: 0 },
   uSectors:    { value: 10.0 },
@@ -128,24 +151,46 @@ const uniforms = {
   uCreaseCount: { value: 0 },
   uAeff:  { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3()) },
   uDeff:  { value: Array.from({length: MAX_CREASES}, () => new THREE.Vector3(1,0,0)) },
-  uAng:   { value: new Float32Array(MAX_CREASES) }
+  uAng:   { value: new Float32Array(MAX_CREASES) },
+
+  uMaskA: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3()) },
+  uMaskD: { value: Array.from({length: MAX_CREASES*MAX_MASKS_PER}, () => new THREE.Vector3(1,0,0)) },
+  uMaskOn:{ value: new Float32Array(MAX_CREASES*MAX_MASKS_PER) }
 };
 function pushToUniforms(){
   uniforms.uCreaseCount.value = base.count;
   uniforms.uAeff.value = eff.A.map(v => v.clone());
   uniforms.uDeff.value = eff.D.map(v => v.clone());
   uniforms.uAng.value  = Float32Array.from(eff.ang);
-  mat.uniformsNeedUpdate = true;
+
+  const flatA = [], flatD = [], on = [];
+  for (let i=0;i<base.count;i++){
+    for (let m=0;m<MAX_MASKS_PER;m++){
+      flatA.push(eff.mA[i][m].clone()); flatD.push(eff.mD[i][m].clone());
+      on.push(m < eff.mCount[i] ? 1 : 0);
+    }
+  }
+  const pad = MAX_CREASES*MAX_MASKS_PER - flatA.length;
+  for (let p=0;p<pad;p++){ flatA.push(new THREE.Vector3()); flatD.push(new THREE.Vector3(1,0,0)); on.push(0); }
+  uniforms.uMaskA.value = flatA;
+  uniforms.uMaskD.value = flatD;
+  uniforms.uMaskOn.value = Float32Array.from(on);
 }
 
+// ---------- Shaders (vertex = rigid hinges + masks; fragment = psychedelic paper) ----------
 const vs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
+  #define MAX_MASKS_PER ${MAX_MASKS_PER}
   precision highp float;
 
   uniform int   uCreaseCount;
   uniform vec3  uAeff[MAX_CREASES];
   uniform vec3  uDeff[MAX_CREASES];
   uniform float uAng[MAX_CREASES];
+
+  uniform vec3  uMaskA[MAX_CREASES*MAX_MASKS_PER];
+  uniform vec3  uMaskD[MAX_CREASES*MAX_MASKS_PER];
+  uniform float uMaskOn[MAX_CREASES*MAX_MASKS_PER];
 
   varying vec3 vPos; varying vec3 vN; varying vec3 vLocal; varying vec2 vUv;
 
@@ -156,18 +201,29 @@ const vs = /* glsl */`
   vec3 rotVec(vec3 v, vec3 u, float ang){ float c=cos(ang), s=sin(ang); return v*c + cross(u, v)*s + u*dot(u,v)*(1.0-c); }
   float sdLine(vec2 p, vec2 a, vec2 d){ return d.x*(p.y - a.y) - d.y*(p.x - a.x); }
 
+  bool inMask(int i, vec2 p){
+    for (int m=0; m<MAX_MASKS_PER; m++){
+      int idx = i*MAX_MASKS_PER + m;
+      if (uMaskOn[idx] > 0.5){
+        vec2 a = uMaskA[idx].xy, d = normalize(uMaskD[idx].xy);
+        if (sdLine(p, a, d) <= 0.0) return false;
+      }
+    }
+    return true;
+  }
+
   void main(){
     vUv = uv;
     vec3 p = position;
     vec3 n = normalize(normal);
 
-    // crisp hinge: rotate only the positive side of each crease
+    // crisp hinge: rotate only the positive side of each crease, within masks
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
       vec3 a = uAeff[i];
       vec3 d = normalize(uDeff[i]);
       float sd = sdLine(p.xy, a.xy, d.xy);
-      if (sd > 0.0){
+      if (sd > 0.0 && inMask(i, p.xy)){
         p = rotAroundLine(p, a, d, uAng[i]);
         n = normalize(rotVec(n, d, uAng[i]));
       }
@@ -245,7 +301,7 @@ const fs = /* glsl */`
     float grain = fbm(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
-    // crease glow (affects folds; harmless for bird)
+    // crease glow (helps read folds)
     float minD = 1e9;
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
@@ -272,13 +328,11 @@ const fs = /* glsl */`
   }
 `;
 
-// Material shared by sheet and bird (keeps the look unified)
+// Material + sheet
 const mat = new THREE.ShaderMaterial({
   vertexShader: vs, fragmentShader: fs, uniforms,
   side: THREE.DoubleSide, extensions: { derivatives: true }
 });
-
-// Paper sheet mesh
 const sheet = new THREE.Mesh(sheetGeo, mat);
 scene.add(sheet);
 
@@ -288,7 +342,7 @@ scene.add(new THREE.Mesh(
   new THREE.MeshBasicMaterial({ color: 0x070711, side: THREE.BackSide })
 ));
 
-// ---------- GUI (optional look tweaks) ----------
+// ---------- GUI (optional) ----------
 const gui = new GUI();
 const looks = gui.addFolder('Look');
 looks.add(uniforms.uSectors, 'value', 3, 24, 1).name('kaleidoSectors');
@@ -312,76 +366,36 @@ function preset_diagonal_valley(){
   addCrease({ Ax:0, Ay:0, Dx:1, Dy:1, deg:180, sign:VALLEY });
 }
 
-// ---------- Built-in Flapping Bird (no external files) ----------
-const bird = {
-  group: null,
-  body: null,
-  leftWing: null,
-  rightWing: null,
-  auto: true,
-  amp: 0.6,
-  speed: 1.2,
-  base: 0.2,
-};
+// Flapping Bird (built-in) — minimal crease set + masks to isolate wing regions
+const bird = { iCenter:-1, iLeft:-1, iRight:-1, ampDeg:55, baseDeg:10, speed:1.2 };
 
-function makeTriGeometry(pts /*array of [x,y,z] triples (multiple of 3)*/){
-  const pos = new Float32Array(pts.flat());
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.computeVertexNormals();
-  return g;
-}
+function preset_flapping_bird(){
+  resetBase();
 
-function buildFlappingBird(){
-  const gBody = makeTriGeometry([
-    // body diamond (two tris)
-    [ 0.00,  0.30, 0], [-0.15,  0.05, 0], [ 0.15,  0.05, 0],
-    [ 0.00, -0.20, 0], [-0.15,  0.05, 0], [ 0.15,  0.05, 0],
+  // 0) Center body fold (valley): vertical line through origin
+  addCrease({ Ax:0, Ay:0, Dx:0, Dy:1, deg:140, sign:VALLEY });
+  bird.iCenter = 0;
 
-    // tail wedge (two tris)
-    [-0.15,  0.05, 0], [-0.38,  0.00, 0], [-0.28, -0.06, 0],
-    [-0.15,  0.05, 0], [-0.28, -0.06, 0], [-0.20,  0.12, 0],
+  // Masks utility
+  const topHalf = { Ax:0, Ay:0, Dx:1, Dy:0 };     // sd > 0 => y > 0
+  const leftHalf= { Ax:0, Ay:0, Dx:0, Dy:1 };     // sd > 0 => x < 0
+  const rightHalf={ Ax:0, Ay:0, Dx:0, Dy:-1 };    // sd > 0 => x > 0
 
-    // neck/head (two tris)
-    [ 0.15,  0.05, 0], [ 0.32,  0.12, 0], [ 0.40,  0.05, 0],
-    [ 0.32,  0.12, 0], [ 0.42,  0.16, 0], [ 0.40,  0.05, 0],
-  ]);
+  // 1) Left wing hinge: a vertical line slightly left of center, only top-left quadrant
+  addCrease({
+    Ax:-0.10, Ay:0.14, Dx:0, Dy:1, deg:80, sign:VALLEY,
+    masks:[ topHalf, leftHalf ]
+  });
+  bird.iLeft = 1;
 
-  // Wing geometry built around a hinge at local origin (0,0,0)
-  const gWingL = makeTriGeometry([
-    [ 0.00,  0.00, 0], [-0.95,  0.35, 0], [-0.90, -0.28, 0],
-  ]);
-  const gWingR = makeTriGeometry([
-    [ 0.00,  0.00, 0], [ 0.90, -0.28, 0], [ 0.95,  0.35, 0],
-  ]);
+  // 2) Right wing hinge: mirror; use Mountain sign to mirror rotation
+  addCrease({
+    Ax:+0.10, Ay:0.14, Dx:0, Dy:1, deg:80, sign:MOUNTAIN,
+    masks:[ topHalf, rightHalf ]
+  });
+  bird.iRight = 2;
 
-  const body = new THREE.Mesh(gBody, mat);
-  const leftWing = new THREE.Mesh(gWingL, mat);
-  const rightWing = new THREE.Mesh(gWingR, mat);
-
-  // Position wings at “shoulders” (hinge points); geometry is defined relative to hinge
-  leftWing.position.set(-0.12, 0.08, 0.0);
-  rightWing.position.set( 0.12, 0.08, 0.0);
-
-  const group = new THREE.Group();
-  group.add(body, leftWing, rightWing);
-
-  // Global transform so it reads well in the scene
-  group.rotation.x = -0.25; // match paper tilt
-  group.scale.set(1.9, 1.9, 1.0);
-
-  // Slight out-of-plane tilt to add depth
-  leftWing.rotation.x = 0.12;
-  rightWing.rotation.x = 0.12;
-
-  return { group, body, leftWing, rightWing };
-}
-
-function ensureBird(){
-  if (bird.group) return;
-  const b = buildFlappingBird();
-  bird.group = b.group; bird.body = b.body; bird.leftWing = b.leftWing; bird.rightWing = b.rightWing;
-  scene.add(bird.group);
+  // (Optional future: small head/tail creases could be added within the budget)
 }
 
 // ---------- DOM wiring ----------
@@ -389,7 +403,7 @@ const presetSel   = document.getElementById('preset');
 const btnApply    = document.getElementById('btnApply');
 const btnPlay     = document.getElementById('btnPlay');
 const btnSnap     = document.getElementById('btnSnap');
-const progress    = document.getElementById('progress');
+const progressEl  = document.getElementById('progress');
 
 const wingAmp     = document.getElementById('wingAmp');
 const wingSpeed   = document.getElementById('wingSpeed');
@@ -407,35 +421,25 @@ btnApply.onclick = () => {
   currentPreset = presetSel.value;
 
   if (currentPreset === 'flapping-bird'){
-    // Show bird, hide sheet & zero out creases
-    ensureBird();
-    sheet.visible = false;
-    resetBase(); pushToUniforms();
-  } else {
-    // Show sheet, hide bird (if present)
-    sheet.visible = true;
-    if (bird.group) bird.group.visible = false;
-
-    if (currentPreset==='half-vertical-valley') preset_half_vertical_valley();
-    else if (currentPreset==='diagonal-valley') preset_diagonal_valley();
-
-    // small camera nudge for visual feedback
-    camera.position.x += (Math.random()-0.5) * 0.02;
-    camera.position.y += (Math.random()-0.5) * 0.02;
+    preset_flapping_bird();
+    // ensure reasonable wing params from UI
+    bird.ampDeg = parseFloat(wingAmp.value);
+    bird.speed  = parseFloat(wingSpeed.value);
+    bird.baseDeg= parseFloat(wingBase.value);
+  } else if (currentPreset === 'half-vertical-valley'){
+    preset_half_vertical_valley();
+  } else if (currentPreset === 'diagonal-valley'){
+    preset_diagonal_valley();
   }
+
+  // small camera nudge for visual feedback
+  camera.position.x += (Math.random()-0.5) * 0.02;
+  camera.position.y += (Math.random()-0.5) * 0.02;
 };
 
 presetSel.addEventListener('change', () => btnApply.click());
 
-btnPlay.onclick = () => {
-  if (currentPreset === 'flapping-bird'){
-    bird.auto = !bird.auto;
-    btnPlay.textContent = bird.auto ? 'Pause' : 'Play';
-  } else {
-    drive.play = !drive.play;
-    btnPlay.textContent = drive.play ? 'Pause' : 'Play';
-  }
-};
+btnPlay.onclick = () => { drive.play = !drive.play; btnPlay.textContent = drive.play ? 'Pause' : 'Play'; };
 
 btnSnap.onclick = () => {
   renderer.domElement.toBlob((blob) => {
@@ -447,20 +451,10 @@ btnSnap.onclick = () => {
   }, 'image/png', 1.0);
 };
 
-progress.addEventListener('input', () => {
-  if (currentPreset === 'flapping-bird'){
-    // When paused, use progress to scrub wing pose (−1..+1 mapped from 0..1)
-    const t = parseFloat(progress.value)*2 - 1;
-    const angle = bird.base + bird.amp * t;
-    if (bird.leftWing){ bird.leftWing.rotation.z =  angle; }
-    if (bird.rightWing){ bird.rightWing.rotation.z = -angle; }
-  } else {
-    drive.progress = parseFloat(progress.value);
-  }
-});
-wingAmp.addEventListener('input', () => bird.amp = parseFloat(wingAmp.value));
-wingSpeed.addEventListener('input', () => bird.speed = parseFloat(wingSpeed.value));
-wingBase.addEventListener('input', () => bird.base = parseFloat(wingBase.value));
+progressEl.addEventListener('input', () => { drive.progress = parseFloat(progressEl.value); });
+wingAmp.addEventListener('input',   () => bird.ampDeg  = parseFloat(wingAmp.value));
+wingSpeed.addEventListener('input', () => bird.speed   = parseFloat(wingSpeed.value));
+wingBase.addEventListener('input',  () => bird.baseDeg = parseFloat(wingBase.value));
 
 // ---------- Shader Animation (texture look) ----------
 function updateShaderAnim(t){
@@ -476,12 +470,32 @@ function updateShaderAnim(t){
   uniforms.uEdgeGlow.value = THREE.MathUtils.clamp(EB + (auto? EA*Math.sin((ES+0.25*gs)*t+2.1) : 0), 0.0, 2.0);
 }
 
+// ---------- Angle driver ----------
+function computeAngles(tSec){
+  // default: simple folds share one parameter
+  let t = drive.play ? (0.5 + 0.5*Math.sin(tSec*drive.speed)) : drive.progress;
+  for (let i=0;i<base.count;i++){ eff.ang[i] = base.sign[i] * base.amp[i] * clamp01(t); }
+
+  if (currentPreset === 'flapping-bird'){
+    // Center body fold: mostly closed; keep it steady for clarity
+    const centerDeg = 140;
+    eff.ang[bird.iCenter] = VALLEY * THREE.MathUtils.degToRad(centerDeg);
+
+    // Wing flapping: animated when Play, else scrub via Progress (mapped to [-1, +1])
+    const phase = drive.play ? Math.sin(tSec * bird.speed) : (drive.progress*2 - 1);
+    const wingDeg = bird.baseDeg + bird.ampDeg * phase;
+
+    // Left wing: valley (+), Right wing: mountain (−) — mirror motion
+    eff.ang[bird.iLeft]  =  VALLEY   * THREE.MathUtils.degToRad(wingDeg);
+    eff.ang[bird.iRight] =  MOUNTAIN * THREE.MathUtils.degToRad(wingDeg);
+  }
+}
+
 // ---------- Start ----------
 function start(){
-  // Bird not created until first time it’s selected
-  presetSel.value = 'half-vertical-valley';
+  presetSel.value = 'flapping-bird'; // start with the bird so you can see the animation
   btnApply.click();
-  progress.value = String(drive.progress);
+  progressEl.value = String(drive.progress);
 }
 start();
 
@@ -490,27 +504,9 @@ function tick(tMs){
   const t = tMs * 0.001;
   uniforms.uTime.value = t;
 
-  if (currentPreset === 'flapping-bird'){
-    // show bird
-    if (bird.group) bird.group.visible = true;
-
-    // live wing animation when “auto” is on
-    if (bird.auto && bird.leftWing && bird.rightWing){
-      const a = bird.base + bird.amp * Math.sin(t * bird.speed);
-      bird.leftWing.rotation.z  =  a;
-      bird.rightWing.rotation.z = -a;
-    }
-
-    // disable the fold engine so shader runs with uCreaseCount=0
-    resetBase(); pushToUniforms();
-  } else {
-    // folds: compute + upload crease transforms
-    computeAngles(t);
-    computeFrames();
-    pushToUniforms();
-  }
-
-  // shader look
+  computeAngles(t);
+  computeFrames();
+  pushToUniforms();
   updateShaderAnim(t);
 
   controls.update();
