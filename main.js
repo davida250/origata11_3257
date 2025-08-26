@@ -1,13 +1,17 @@
 /**
- * Psychedelic Origami — Compact Toolbar + Overlay Drawer
- * - Three simple fold presets (Half Vertical, Diagonal, Gate)
- * - One Progress slider (no play/pause)
- * - One Global Speed slider scales ALL time-based animation (shader cycles)
- * - Advanced controls live in a bottom overlay drawer (<details>) for minimal screen usage
+ * Psychedelic Origami — Compact UI with per-control Base/Amount/Speed
  *
- * Notes:
- *  - Valley = +°, Mountain = −° (Origami Simulator convention)
- *  - Dynamic reflections with THREE.CubeCamera; the paper is hidden during capture to avoid self-reflection
+ * Presets: Half Vertical (Valley), Diagonal (Valley), Gate (2× Valley)
+ * Fold sign: Valley = +°, Mountain = −° (Origami Simulator convention)
+ *
+ * UX:
+ *  - One Progress slider for folding (no play/pause).
+ *  - One Global Speed slider multiplies ALL time-based animation.
+ *  - Auto FX toggle: when OFF, use Base values only; when ON, each control animates with its own Amount & Speed.
+ *
+ * Rendering:
+ *  - three.js + EffectComposer(FXAA, UnrealBloom) for crisp lines + restrained glow.
+ *  - Dynamic reflections via CubeCamera; sheet hidden during capture to avoid self-reflection.
  */
 
 import * as THREE from 'three';
@@ -69,6 +73,7 @@ const tmp = { v: new THREE.Vector3() };
 function sdLine2(p, a, d){ const px=p.x-a.x, py=p.y-a.y; return d.x*py - d.y*px; }
 function rotPointAroundAxis(p, a, axisUnit, ang){ tmp.v.copy(p).sub(a).applyAxisAngle(axisUnit, ang).add(a); p.copy(tmp.v); }
 function rotVecAxis(v, axisUnit, ang){ v.applyAxisAngle(axisUnit, ang); }
+function clamp(x, lo, hi){ return x<lo?lo:x>hi?hi:x; }
 function clamp01(x){ return x<0?0:x>1?1:x; }
 
 // ---------- Minimal crease engine with tiny mask budget ----------
@@ -303,7 +308,7 @@ const fs = /* glsl */`
     float grain = fbm(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
-    // crease glow
+    // crease glow (distance to nearest crease)
     float minD = 1e9;
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
@@ -370,7 +375,7 @@ function preset_gate_valley(){
   addCrease({ Ax:-x, Ay:0, Dx:0, Dy:1, deg:180, sign:VALLEY });
 }
 
-// ---------- DOM wiring ----------
+// ---------- DOM ----------
 const presetSel   = document.getElementById('preset');
 const btnSnap     = document.getElementById('btnSnap');
 const progress    = document.getElementById('progress');
@@ -380,15 +385,19 @@ const sectors     = document.getElementById('sectors');
 const btnMore     = document.getElementById('btnMore');
 const drawer      = document.getElementById('drawer');
 
-const hueBase = document.getElementById('hueBase'), hueAmp = document.getElementById('hueAmp'), hueVar = document.getElementById('hueVar');
-const filmBase = document.getElementById('filmBase'), filmAmp = document.getElementById('filmAmp'), filmVar = document.getElementById('filmVar');
-const edgeBase = document.getElementById('edgeBase'), edgeAmp = document.getElementById('edgeAmp'), edgeVar = document.getElementById('edgeVar');
-const reflBase = document.getElementById('reflBase'), reflAmp = document.getElementById('reflAmp'), reflVar = document.getElementById('reflVar');
+// Animated control inputs (Base / Amount / Speed)
+const ids = s => document.getElementById(s);
+const P = {
+  hue:  { base: ids('hueBase'),  amp: ids('hueAmp'),  spd: ids('hueSpeed'),  min:0,   max:1,   phase:0.00 },
+  film: { base: ids('filmBase'), amp: ids('filmAmp'), spd: ids('filmSpeed'), min:100, max:800, phase:0.65 },
+  edge: { base: ids('edgeBase'), amp: ids('edgeAmp'), spd: ids('edgeSpeed'), min:0,   max:2,   phase:1.30 },
+  refl: { base: ids('reflBase'), amp: ids('reflAmp'), spd: ids('reflSpeed'), min:0,   max:1,   phase:2.10 },
+  spec: { base: ids('specBase'), amp: ids('specAmp'), spd: ids('specSpeed'), min:0,   max:2,   phase:0.25 },
+  rim:  { base: ids('rimBase'),  amp: ids('rimAmp'),  spd: ids('rimSpeed'),  min:0,   max:2,   phase:0.85 },
+  bstr: { base: ids('bloomBase'), amp: ids('bloomAmp'), spd: ids('bloomSpeed'), min:0, max:2.5, phase:1.75 },
+  brad: { base: ids('bloomRadBase'), amp: ids('bloomRadAmp'), spd: ids('bloomRadSpeed'), min:0, max:1.5, phase:2.50 },
+};
 
-const specInt = document.getElementById('specInt'), specPow = document.getElementById('specPow'), rimInt = document.getElementById('rimInt');
-const bloomStr = document.getElementById('bloomStr'), bloomRad = document.getElementById('bloomRad');
-
-// Preset change (no Apply button; instant)
 presetSel.addEventListener('change', () => {
   const v = presetSel.value;
   if (v==='half-vertical-valley') preset_half_vertical_valley();
@@ -399,7 +408,6 @@ presetSel.addEventListener('change', () => {
   camera.position.y += (Math.random()-0.5) * 0.02;
 });
 
-// PNG save
 btnSnap.addEventListener('click', () => {
   renderer.domElement.toBlob((blob) => {
     if (!blob) return;
@@ -410,23 +418,9 @@ btnSnap.addEventListener('click', () => {
   }, 'image/png', 1.0);
 });
 
-// Toolbar sliders/toggles
 progress.addEventListener('input', () => { drive.progress = parseFloat(progress.value); });
 globalSpeed.addEventListener('input', () => { drive.globalSpeed = parseFloat(globalSpeed.value); });
 sectors.addEventListener('input', () => { uniforms.uSectors.value = parseFloat(sectors.value); });
-
-// Base values (applied even when Auto FX = off)
-hueBase.addEventListener('input',  () => { uniforms.uHueShift.value     = THREE.MathUtils.clamp(parseFloat(hueBase.value), 0, 1);  });
-filmBase.addEventListener('input', () => { uniforms.uFilmNm.value       = THREE.MathUtils.clamp(parseFloat(filmBase.value), 100, 800); });
-edgeBase.addEventListener('input', () => { uniforms.uEdgeGlow.value     = THREE.MathUtils.clamp(parseFloat(edgeBase.value), 0, 2); });
-reflBase.addEventListener('input', () => { uniforms.uReflectivity.value = THREE.MathUtils.clamp(parseFloat(reflBase.value), 0, 1);  });
-
-// Surface + bloom
-specInt.addEventListener('input', () => uniforms.uSpecIntensity.value = parseFloat(specInt.value));
-specPow.addEventListener('input', () => uniforms.uSpecPower.value     = parseFloat(specPow.value));
-rimInt .addEventListener('input', () => uniforms.uRimIntensity.value  = parseFloat(rimInt.value));
-bloomStr.addEventListener('input', () => bloom.strength = parseFloat(bloomStr.value));
-bloomRad.addEventListener('input', () => bloom.radius   = parseFloat(bloomRad.value));
 
 // Drawer toggle
 btnMore.addEventListener('click', () => {
@@ -434,27 +428,31 @@ btnMore.addEventListener('click', () => {
   btnMore.setAttribute('aria-expanded', drawer.open ? 'true' : 'false');
 });
 
-// ---------- Shader Animation (global + per-parameter speed variation) ----------
+// ---------- Shader Animation (Base + Amount*sin(t * GlobalSpeed * Speed + Phase)) ----------
+function v(el){ return parseFloat(el.value); }
+function osc(base, amp, w, t){ return base + amp * Math.sin(w * t); }
+
 function updateShaderAnim(t){
   const auto = shaderAuto.value === 'on';
-  const g = drive.globalSpeed;
+  const g = drive.globalSpeed; // global multiplier
 
-  const HB = parseFloat(hueBase.value),  HA = parseFloat(hueAmp.value),  HV = parseFloat(hueVar.value);
-  const FB = parseFloat(filmBase.value), FA = parseFloat(filmAmp.value), FV = parseFloat(filmVar.value);
-  const EB = parseFloat(edgeBase.value), EA = parseFloat(edgeAmp.value), EV = parseFloat(edgeVar.value);
-  const RB = parseFloat(reflBase.value), RA = parseFloat(reflAmp.value), RV = parseFloat(reflVar.value);
+  const hue  = auto ? clamp(osc(v(P.hue.base),  v(P.hue.amp),  g*v(P.hue.spd),  t + P.hue.phase),  P.hue.min,  P.hue.max)  : clamp(v(P.hue.base),  P.hue.min,  P.hue.max);
+  const film = auto ? clamp(osc(v(P.film.base), v(P.film.amp), g*v(P.film.spd), t + P.film.phase), P.film.min, P.film.max) : clamp(v(P.film.base), P.film.min, P.film.max);
+  const edge = auto ? clamp(osc(v(P.edge.base), v(P.edge.amp), g*v(P.edge.spd), t + P.edge.phase), P.edge.min, P.edge.max) : clamp(v(P.edge.base), P.edge.min, P.edge.max);
+  const refl = auto ? clamp(osc(v(P.refl.base), v(P.refl.amp), g*v(P.refl.spd), t + P.refl.phase), P.refl.min, P.refl.max) : clamp(v(P.refl.base), P.refl.min, P.refl.max);
+  const spec = auto ? clamp(osc(v(P.spec.base), v(P.spec.amp), g*v(P.spec.spd), t + P.spec.phase), P.spec.min, P.spec.max) : clamp(v(P.spec.base), P.spec.min, P.spec.max);
+  const rim  = auto ? clamp(osc(v(P.rim.base),  v(P.rim.amp),  g*v(P.rim.spd),  t + P.rim.phase),  P.rim.min,  P.rim.max)  : clamp(v(P.rim.base),  P.rim.min,  P.rim.max);
+  const bstr = auto ? clamp(osc(v(P.bstr.base), v(P.bstr.amp), g*v(P.bstr.spd), t + P.bstr.phase), P.bstr.min, P.bstr.max) : clamp(v(P.bstr.base), P.bstr.min, P.bstr.max);
+  const brad = auto ? clamp(osc(v(P.brad.base), v(P.brad.amp), g*v(P.brad.spd), t + P.brad.phase), P.brad.min, P.brad.max) : clamp(v(P.brad.base), P.brad.min, P.brad.max);
 
-  const hueW  = g * (1.0 + HV);
-  const filmW = g * (1.0 + FV);
-  const edgeW = g * (1.0 + EV);
-  const reflW = g * (1.0 + RV);
-
-  if (auto){
-    uniforms.uHueShift.value     = THREE.MathUtils.clamp(HB + HA*Math.sin(t*hueW + 0.00), 0, 1);
-    uniforms.uFilmNm.value       = THREE.MathUtils.clamp(FB + FA*Math.sin(t*filmW + 0.65), 100, 800);
-    uniforms.uEdgeGlow.value     = THREE.MathUtils.clamp(EB + EA*Math.sin(t*edgeW + 1.30), 0.0, 2.0);
-    uniforms.uReflectivity.value = THREE.MathUtils.clamp(RB + RA*Math.sin(t*reflW + 2.10), 0.0, 1.0);
-  }
+  uniforms.uHueShift.value     = hue;
+  uniforms.uFilmNm.value       = film;
+  uniforms.uEdgeGlow.value     = edge;
+  uniforms.uReflectivity.value = refl;
+  uniforms.uSpecIntensity.value= spec;
+  uniforms.uRimIntensity.value = rim;
+  bloom.strength = bstr;
+  bloom.radius   = brad;
 }
 
 // ---------- Folding solver ----------
@@ -499,7 +497,7 @@ function pushAll(){ pushToUniforms(); }
 
 // ---------- Start ----------
 presetSel.value = 'half-vertical-valley';
-presetSel.dispatchEvent(new Event('change')); // apply
+presetSel.dispatchEvent(new Event('change')); // apply preset
 progress.value = String(drive.progress);
 
 // ---------- Frame loop ----------
@@ -512,10 +510,10 @@ function tick(tMs){
   computeFrames();
   pushAll();
 
-  // Shader animation
+  // Shader animation (reads Base/Amp/Speed every frame)
   updateShaderAnim(t);
 
-  // Dynamic reflections (hide the sheet while capturing to avoid self-reflection)
+  // Dynamic reflections (hide sheet while capturing)
   sheet.visible = false;
   cubeCam.position.copy(sheet.position);
   cubeCam.update(renderer, scene);
