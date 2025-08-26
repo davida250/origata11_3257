@@ -1,8 +1,9 @@
 /**
- *  Origata v0.23
- * - Each material/texture control = Amount + Speed (with numeric outputs)
- * - All 0..1 ranges use decimal steps (0.01/0.001) so you can fine‑tune values
- * - Expand (gear) button is solid blue via CSS
+ *   Origata v0.23
+ *  - Texture types: Psychedelic · Perlin · Fractal (fBm) · Ridged
+ *  - Texture Scale slider (controls spatial frequency)
+ * References for algorithms (concepts): Perlin noise and improved fade; fBm & ridged fractals; canonical GLSL noise patterns. See README notes. 
+ * (Perlin 2002; Quilez on fBm/ridged; Ashima GLSL-noise.) 
  */
 
 import * as THREE from 'three';
@@ -123,9 +124,10 @@ const uniforms = {
   uSectors:       { value: 10.0 },
 
   // texture/pattern selection
-  uTexMode:       { value: 0 },    // 0: psychedelic, 1: paper, 2: marble, 3: stripes
-  uTexAmt:        { value: 0.50 }, // Amount (variability)
-  uTexSpeed:      { value: 0.60 }, // Speed multiplier for texture animation
+  uTexMode:       { value: 0 },     // 0: psychedelic, 1: perlin, 2: fbm, 3: ridged
+  uTexAmt:        { value: 0.50 },  // Amount (variability/contrast)
+  uTexSpeed:      { value: 0.60 },  // Speed multiplier for texture animation
+  uTexScale:      { value: 1.00 },  // NEW: spatial scale (frequency)
 
   // color / paper optics
   uHueShift:      { value: 0.05 },
@@ -215,6 +217,7 @@ const vs = /* glsl */`
     vec3 p = position;
     vec3 n = normalize(normal);
 
+    // sequential hinge rotations (valley/mountain)
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
       vec3 a = uAeff[i];
@@ -233,6 +236,7 @@ const vs = /* glsl */`
     gl_Position = projectionMatrix * viewMatrix * world;
   }
 `;
+
 const fs = /* glsl */`
   #define MAX_CREASES ${MAX_CREASES}
   precision highp float;
@@ -242,6 +246,7 @@ const fs = /* glsl */`
   uniform int   uTexMode;
   uniform float uTexAmt;
   uniform float uTexSpeed;
+  uniform float uTexScale;
 
   uniform float uHueShift;
   uniform float uIridescence, uFilmIOR, uFilmNm, uFiber, uEdgeGlow;
@@ -259,18 +264,60 @@ const fs = /* glsl */`
 
   #define PI 3.14159265359
 
+  /* --- utility noise (hash/value) used by fibers, etc. */
   float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453123); }
-  float noise(vec2 p){
+  float noiseVal(vec2 p){
     vec2 i=floor(p), f=fract(p);
     float a=hash(i), b=hash(i+vec2(1,0)), c=hash(i+vec2(0,1)), d=hash(i+vec2(1,1));
     vec2 u=f*f*(3.0-2.0*f);
     return mix(a,b,u.x)+ (c-a)*u.y*(1.0-u.x) + (d-b)*u.x*u.y;
   }
-  float fbm(vec2 p){
+  float fbmVal(vec2 p){
     float v=0.0, a=0.5;
-    for(int i=0;i<5;i++){ v+=a*noise(p); p*=2.0; a*=0.5; }
+    for(int i=0;i<5;i++){ v+=a*noiseVal(p); p*=2.0; a*=0.5; }
     return v;
   }
+
+  /* --- Perlin-style gradient noise (2D), with improved fade */
+  vec2 grad2(vec2 p){
+    float a = 6.2831853 * hash(p);  // random angle
+    return vec2(cos(a), sin(a));
+  }
+  float fade(float t){ return t*t*t*(t*(t*6.0-15.0)+10.0); } // Perlin's 6t^5-15t^4-10t^3
+
+  float perlin(vec2 p){
+    vec2 i=floor(p), f=fract(p);
+    vec2 g00=grad2(i+vec2(0,0));
+    vec2 g10=grad2(i+vec2(1,0));
+    vec2 g01=grad2(i+vec2(0,1));
+    vec2 g11=grad2(i+vec2(1,1));
+    float n00=dot(g00, f-vec2(0,0));
+    float n10=dot(g10, f-vec2(1,0));
+    float n01=dot(g01, f-vec2(0,1));
+    float n11=dot(g11, f-vec2(1,1));
+    vec2 u = vec2(fade(f.x), fade(f.y));
+    return mix(mix(n00,n10,u.x), mix(n01,n11,u.x), u.y); // approx [-1,1]
+  }
+  float fbmPerlin(vec2 p){
+    float sum=0.0, amp=0.5, freq=1.0;
+    for(int i=0;i<6;i++){
+      sum += amp * perlin(p*freq);
+      freq*=2.0; amp*=0.5;
+    }
+    return sum; // range ~[-1,1]
+  }
+  float ridged(vec2 p){
+    float sum=0.0, amp=0.5, freq=1.0;
+    for(int i=0;i<6;i++){
+      float n = perlin(p*freq);
+      n = 1.0 - abs(n); // ridges
+      n *= n;
+      sum += n * amp;
+      freq*=2.0; amp*=0.5;
+    }
+    return sum; // ~[0,1]
+  }
+
   vec3 hsv2rgb(vec3 c){
     vec3 rgb = clamp(abs(mod(c.x*6.0+vec3(0.,4.,2.), 6.)-3.)-1., 0., 1.);
     return c.z * mix(vec3(1.0), rgb, c.y);
@@ -282,43 +329,47 @@ const fs = /* glsl */`
   }
   float sdLine(vec2 p, vec2 a, vec2 d){ return d.x*(p.y - a.y) - d.y*(p.x - a.x); }
 
-  vec3 texturePsychedelic(vec3 worldPos, float t){
-    // kaleidoscopic base
+  /* --- Texture generators --- */
+  vec3 texPsychedelic(vec3 worldPos, float t){
     float theta = atan(worldPos.z, worldPos.x);
-    float r = length(worldPos.xz) * 0.55;
+    float r = length(worldPos.xz) * 0.55 * max(0.001, uTexScale);
     float seg = 2.0*PI / max(3.0, uSectors);
     float aa = mod(theta, seg); aa = abs(aa - 0.5*seg);
     vec2 k = vec2(cos(aa), sin(aa)) * r;
 
-    float amp = mix(0.2, 2.0, clamp(uTexAmt, 0.0, 1.0));
-    vec2 q = k*2.0*amp + vec2(0.18*t, -0.12*t);
-    q += amp*0.5*vec2(noise(q+13.1), noise(q+71.7));
-
-    float n = noise(q*2.0) * 0.75 + 0.25*noise(q*5.0);
+    vec2 q = k*2.0 + vec2(0.18*t, -0.12*t);
+    q += 0.5*vec2(noiseVal(q+13.1), noiseVal(q+71.7));
+    float n = noiseVal(q*2.0) * 0.75 + 0.25*noiseVal(q*5.0);
     float hue = fract(n + 0.15*sin(t*0.3) + uHueShift);
-    return hsv2rgb(vec3(hue, 0.9, smoothstep(0.25, 1.0, n)));
+    float contrast = mix(1.0, 1.8, clamp(uTexAmt,0.0,1.0));
+    vec3 baseCol = hsv2rgb(vec3(hue, 0.9, smoothstep(0.25, 1.0, n)));
+    return pow(baseCol, vec3(contrast));
   }
 
-  vec3 texturePaper(vec2 p, float t){
-    // off-white with subtle grain; uTexAmt controls grain amount
-    float g = fbm(p*25.0 + vec2(0.1*t, -0.07*t));
-    vec3 base = vec3(0.93, 0.935, 0.91);
-    return base + (g-0.5) * 0.15 * clamp(uTexAmt,0.0,1.0);
-  }
-
-  vec3 textureMarble(vec2 p, float t){
-    vec2 q = p*2.2;
-    float swirl = q.x*6.0 + 2.5*fbm(q*1.5 + vec2(0.3*t, -0.2*t));
-    float m = 0.5 + 0.5*sin(swirl);
-    float c = pow(m, mix(1.0, 3.0, clamp(uTexAmt,0.0,1.0)));
-    return mix(vec3(0.85,0.86,0.9), vec3(0.2,0.22,0.26), c);
-  }
-
-  vec3 textureStripes(vec2 p, float t){
-    float s = 0.5 + 0.5*sin(p.x*60.0 + t*4.0);
-    float k = pow(s, mix(1.0, 3.0, clamp(uTexAmt,0.0,1.0)));
+  vec3 texPerlin(vec2 p, float t){
+    p = p * max(0.001, uTexScale) + vec2(0.17*t, -0.11*t);
+    float n = perlin(p);                         // [-1,1]
+    float k = pow(0.5*(n+1.0), mix(1.0, 3.0, clamp(uTexAmt,0.0,1.0))); // [0,1]
     vec3 a = hsv2rgb(vec3(fract(uHueShift), 0.85, 0.9));
-    vec3 b = hsv2rgb(vec3(fract(uHueShift + 0.2), 0.85, 0.9));
+    vec3 b = hsv2rgb(vec3(fract(uHueShift + 0.25), 0.9, 0.95));
+    return mix(a, b, k);
+  }
+
+  vec3 texFBM(vec2 p, float t){
+    p = p * max(0.001, uTexScale) + vec2(0.15*t, -0.09*t);
+    float f = fbmPerlin(p);                      // ~[-1,1]
+    float k = pow(0.5*(f+1.0), mix(1.0, 3.0, clamp(uTexAmt,0.0,1.0)));
+    vec3 a = hsv2rgb(vec3(fract(uHueShift + 0.05), 0.8, 0.92));
+    vec3 b = hsv2rgb(vec3(fract(uHueShift + 0.35), 0.9, 0.95));
+    return mix(a, b, k);
+  }
+
+  vec3 texRidged(vec2 p, float t){
+    p = p * max(0.001, uTexScale) + vec2(0.12*t, 0.08*t);
+    float r = ridged(p);                         // ~[0,1]
+    float k = pow(clamp(r,0.0,1.0), mix(1.0, 2.5, clamp(uTexAmt,0.0,1.0)));
+    vec3 a = hsv2rgb(vec3(fract(uHueShift + 0.10), 0.85, 0.9));
+    vec3 b = hsv2rgb(vec3(fract(uHueShift + 0.55), 0.9, 0.95));
     return mix(a, b, k);
   }
 
@@ -328,24 +379,24 @@ const fs = /* glsl */`
     // choose base color by texture mode
     vec3 baseCol;
     if (uTexMode == 0){
-      baseCol = texturePsychedelic(vPos, tTex);
+      baseCol = texPsychedelic(vPos, tTex);
     } else if (uTexMode == 1){
-      baseCol = texturePaper(vLocal.xy, tTex);
+      baseCol = texPerlin(vLocal.xy, tTex);
     } else if (uTexMode == 2){
-      baseCol = textureMarble(vLocal.xy, tTex);
+      baseCol = texFBM(vLocal.xy, tTex);
     } else {
-      baseCol = textureStripes(vLocal.xy, tTex);
+      baseCol = texRidged(vLocal.xy, tTex);
     }
 
-    // paper fibers (applies to all modes)
+    // paper fibers (uses simple value-noise fbm for fine grain)
     float fiberLines = 0.0;
     {
-      float warp = fbm(vLocal.xy*4.0 + vec2(0.2*uTime, -0.1*uTime));
+      float warp = fbmVal(vLocal.xy*4.0 + vec2(0.2*uTime, -0.1*uTime));
       float l = sin(vLocal.y*420.0 + warp*8.0);
       float widthAA = fwidth(l);
       fiberLines = smoothstep(0.6, 0.6 - widthAA, abs(l));
     }
-    float grain = fbm(vLocal.xy*25.0);
+    float grain = fbmVal(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
     // nearest crease (for glow)
@@ -432,19 +483,20 @@ const sectorsOut  = document.getElementById('sectorsOut');
 const btnMore     = document.getElementById('btnMore');
 const drawer      = document.getElementById('drawer');
 
-/* NEW: texture UI */
+/* Texture UI */
 const texMode     = document.getElementById('texMode');
 const texAmp      = document.getElementById('texAmp');
 const texAmpOut   = document.getElementById('texAmpOut');
 const texSpeed    = document.getElementById('texSpeed');
 const texSpeedOut = document.getElementById('texSpeedOut');
+const texScale    = document.getElementById('texScale');
+const texScaleOut = document.getElementById('texScaleOut');
 
 /* Parameter wiring: base constants + (Amount, Speed) sliders */
 const el = id => document.getElementById(id);
 function out(id){ return document.getElementById(id); }
 
 const PARAMS = {
-  // Texture "Amount" animates around a base (0.5) to keep usable range without clipping
   tex:  { base: 0.50, min:0,   max:1,   phase:1.10, amp: texAmp,               aOut: texAmpOut,               spd: texSpeed,               sOut: texSpeedOut,               set:v=>{ uniforms.uTexAmt.value=v; } },
   hue:  { base: 0.05, min:0,   max:1,   phase:0.00, amp: el('hueAmp'),         aOut: out('hueAmpOut'),        spd: el('hueSpeed'),         sOut: out('hueSpeedOut'),        set:v=>{ uniforms.uHueShift.value=v; } },
   film: { base:360.0, min:100, max:800, phase:0.65, amp: el('filmAmp'),        aOut: out('filmAmpOut'),       spd: el('filmSpeed'),        sOut: out('filmSpeedOut'),       set:v=>{ uniforms.uFilmNm.value=v; } },
@@ -474,6 +526,7 @@ function bindRangeWithOut(rangeEl, outEl, decimals=2, onInput){
 bindRangeWithOut(progress,    progressOut,    3, v => { drive.progress = v; });
 bindRangeWithOut(globalSpeed, globalSpeedOut, 2, v => { drive.globalSpeed = v; });
 bindRangeWithOut(sectors,     sectorsOut,     0, v => { uniforms.uSectors.value = v; });
+bindRangeWithOut(texScale,    texScaleOut,    2, v => { uniforms.uTexScale.value = v; });
 
 /* Toolbar actions */
 btnMore.addEventListener('click', () => {
@@ -500,7 +553,7 @@ presetSel.addEventListener('change', () => {
   camera.position.y += (Math.random()-0.5)*0.02;
 });
 
-/* Texture select */
+/* Texture selects */
 texMode.addEventListener('change', () => {
   uniforms.uTexMode.value = parseInt(texMode.value, 10) | 0;
 });
@@ -529,7 +582,7 @@ function updateAnimatedParameters(t){
   apply(PARAMS.bstr);
   apply(PARAMS.brad);
 
-  // Texture flow speed is driven directly (globalSpeed multiplies it)
+  // Texture flow speed (global multiplier)
   uniforms.uTexSpeed.value = g * (+PARAMS.tex.spd.value);
 }
 
