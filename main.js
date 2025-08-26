@@ -1,10 +1,14 @@
 /**
- * Psychedelic Origami — Labeled, Controllable UI
- * - Three presets (Half Vertical, Diagonal, Gate)
- * - Progress (fold) + Global Speed in toolbar
- * - Advanced drawer: each visual parameter has Base · Amount · Speed (no overlap)
- * - Valley = +°, Mountain = −° (Origami Simulator convention)
- * - Dynamic reflections (CubeCamera) + FXAA + UnrealBloom
+ * Psychedelic Origami — Sleek Controls (Amount + Speed per parameter)
+ *
+ * - Presets: Half Vertical (Valley), Diagonal (Valley), Gate (2× Valley)
+ * - Progress (fold) + Global Speed on the toolbar
+ * - Advanced drawer: each visual parameter has exactly two labeled sliders:
+ *      Amount (variability or static offset) + Speed (animation rate)
+ * - Auto FX toggle:
+ *      ON  -> value = base + amount * sin(globalSpeed * speed * t + phase)
+ *      OFF -> value = base + amount   (static)
+ * - Valley = +°, Mountain = −°  (Origami Simulator convention)
  */
 
 import * as THREE from 'three';
@@ -44,7 +48,7 @@ fxaa.material.uniforms.resolution.value.set(1 / window.innerWidth, 1 / window.in
 composer.addPass(fxaa);
 composer.addPass(new OutputPass());
 
-/* ---------- Background & Sheet ---------- */
+/* ---------- Background & Paper ---------- */
 const SIZE = 3.0;
 const SEG = 160;
 const sheetGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
@@ -56,7 +60,7 @@ const background = new THREE.Mesh(
 );
 scene.add(background);
 
-/* ---------- Dynamic Reflection Setup (CubeCamera) ---------- */
+/* ---------- Dynamic Reflection (CubeCamera) ---------- */
 const cubeRT = new THREE.WebGLCubeRenderTarget(256, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
 const cubeCam = new THREE.CubeCamera(0.1, 200, cubeRT);
 scene.add(cubeCam);
@@ -123,19 +127,19 @@ const drive = { progress:0.65, globalSpeed:1.0 };
 const uniforms = {
   uTime:          { value: 0 },
   uSectors:       { value: 10.0 },
-  uHueShift:      { value: 0.05 },
+  uHueShift:      { value: 0.05 },   // base hue offset
   uIridescence:   { value: 0.65 },
   uFilmIOR:       { value: 1.35 },
-  uFilmNm:        { value: 360.0 },
+  uFilmNm:        { value: 360.0 },  // base thin-film thickness
   uFiber:         { value: 0.35 },
-  uEdgeGlow:      { value: 0.7 },
+  uEdgeGlow:      { value: 0.7 },    // base edge glow
 
   // reflections & lighting
   uEnvMap:        { value: cubeRT.texture },
-  uReflectivity:  { value: 0.25 },
-  uSpecIntensity: { value: 0.7 },
-  uSpecPower:     { value: 24.0 },
-  uRimIntensity:  { value: 0.5 },
+  uReflectivity:  { value: 0.25 },   // base reflectivity
+  uSpecIntensity: { value: 0.7 },    // base spec
+  uSpecPower:     { value: 24.0 },   // fixed shininess
+  uRimIntensity:  { value: 0.5 },    // base rim
   uLightDir:      { value: new THREE.Vector3(0.5, 1.0, 0.25).normalize() },
 
   // folding data
@@ -209,6 +213,7 @@ const vs = /* glsl */`
     vUv = uv;
     vec3 p = position;
     vec3 n = normalize(normal);
+
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
       vec3 a = uAeff[i];
@@ -219,6 +224,7 @@ const vs = /* glsl */`
         n = normalize(rotVec(n, d, uAng[i]));
       }
     }
+
     vLocal = p;
     vec4 world = modelMatrix * vec4(p, 1.0);
     vPos = world.xyz;
@@ -271,6 +277,7 @@ const fs = /* glsl */`
   float sdLine(vec2 p, vec2 a, vec2 d){ return d.x*(p.y - a.y) - d.y*(p.x - a.x); }
 
   void main(){
+    // Kaleidoscopic base pattern
     float theta = atan(vPos.z, vPos.x);
     float r = length(vPos.xz) * 0.55;
     float seg = 2.0*PI / max(3.0, uSectors);
@@ -283,6 +290,7 @@ const fs = /* glsl */`
     float hue = fract(n + 0.15*sin(uTime*0.3) + uHueShift);
     vec3 baseCol = hsv2rgb(vec3(hue, 0.9, smoothstep(0.25, 1.0, n)));
 
+    // paper fibers
     float fiberLines = 0.0;
     {
       float warp = fbm(vLocal.xy*4.0 + vec2(0.2*uTime, -0.1*uTime));
@@ -293,6 +301,7 @@ const fs = /* glsl */`
     float grain = fbm(vLocal.xy*25.0);
     baseCol *= 1.0 + uFiber*(0.06*grain - 0.03) + uFiber*0.08*fiberLines;
 
+    // nearest crease (for glow)
     float minD = 1e9;
     for (int i=0; i<MAX_CREASES; i++){
       if (i >= uCreaseCount) break;
@@ -304,26 +313,32 @@ const fs = /* glsl */`
     float aa = fwidth(minD);
     float edge = 1.0 - smoothstep(0.0025, 0.0025 + aa, minD);
 
+    // view/lighting
     vec3 V = normalize(cameraPosition - vPos);
     vec3 N = normalize(vN);
 
+    // thin-film + Fresnel-ish blend
     float cosT = clamp(dot(N, V), 0.0, 1.0);
     vec3 film = thinFilm(cosT, uFilmIOR, uFilmNm);
     float F = pow(1.0 - cosT, 5.0);
     vec3 col = mix(baseCol, mix(baseCol, film, uIridescence), F);
 
+    // specular + rim
     vec3 L = normalize(uLightDir);
     vec3 H = normalize(L + V);
     float spec = pow(max(dot(N, H), 0.0), uSpecPower) * uSpecIntensity;
     float rim  = pow(1.0 - max(dot(N, V), 0.0), 2.0) * uRimIntensity;
     col += spec + rim;
 
+    // dynamic reflection
     vec3 R = reflect(-V, N);
     vec3 env = textureCube(uEnvMap, R).rgb;
     col = mix(col, env, clamp(uReflectivity, 0.0, 1.0));
 
+    // crease glow tint
     col += uEdgeGlow * edge * film * 0.6;
 
+    // vignette
     float vign = smoothstep(1.2, 0.2, length(vUv-0.5)*1.2);
     gl_FragColor = vec4(col*vign, 1.0);
   }
@@ -356,44 +371,47 @@ function preset_gate_valley(){
 /* ---------- DOM ---------- */
 const presetSel   = document.getElementById('preset');
 const btnSnap     = document.getElementById('btnSnap');
+const autoFx      = document.getElementById('autoFx');
+
 const progress    = document.getElementById('progress');
 const progressOut = document.getElementById('progressOut');
-const autoFx      = document.getElementById('autoFx');
+
 const globalSpeed = document.getElementById('globalSpeed');
 const globalSpeedOut = document.getElementById('globalSpeedOut');
+
 const sectors     = document.getElementById('sectors');
 const sectorsOut  = document.getElementById('sectorsOut');
+
 const btnMore     = document.getElementById('btnMore');
 const drawer      = document.getElementById('drawer');
 
-/* Animated parameters (Base/Amp/Speed) with outputs */
+/* Parameter wiring: base constants + (Amount, Speed) sliders */
 const el = id => document.getElementById(id);
-const P = {
-  hue:  { base: el('hueBase'),  amp: el('hueAmp'),  spd: el('hueSpeed'),  bOut: el('hueBaseOut'),  aOut: el('hueAmpOut'),  sOut: el('hueSpeedOut'),  min:0,   max:1,   phase:0.00, set:(v)=>uniforms.uHueShift.value=v, decB:2, decA:2, decS:2 },
-  film: { base: el('filmBase'), amp: el('filmAmp'), spd: el('filmSpeed'), bOut: el('filmBaseOut'), aOut: el('filmAmpOut'), sOut: el('filmSpeedOut'), min:100, max:800, phase:0.65, set:(v)=>uniforms.uFilmNm.value=v,   decB:0, decA:0, decS:2 },
-  edge: { base: el('edgeBase'), amp: el('edgeAmp'), spd: el('edgeSpeed'), bOut: el('edgeBaseOut'), aOut: el('edgeAmpOut'), sOut: el('edgeSpeedOut'), min:0,   max:2,   phase:1.30, set:(v)=>uniforms.uEdgeGlow.value=v,  decB:2, decA:2, decS:2 },
-  refl: { base: el('reflBase'), amp: el('reflAmp'), spd: el('reflSpeed'), bOut: el('reflBaseOut'), aOut: el('reflAmpOut'), sOut: el('reflSpeedOut'), min:0,   max:1,   phase:2.10, set:(v)=>uniforms.uReflectivity.value=v, decB:2, decA:2, decS:2 },
-  spec: { base: el('specBase'), amp: el('specAmp'), spd: el('specSpeed'), bOut: el('specBaseOut'), aOut: el('specAmpOut'), sOut: el('specSpeedOut'), min:0,   max:2,   phase:0.25, set:(v)=>uniforms.uSpecIntensity.value=v, decB:2, decA:2, decS:2 },
-  rim:  { base: el('rimBase'),  amp: el('rimAmp'),  spd: el('rimSpeed'),  bOut: el('rimBaseOut'),  aOut: el('rimAmpOut'),  sOut: el('rimSpeedOut'),  min:0,   max:2,   phase:0.85, set:(v)=>uniforms.uRimIntensity.value=v, decB:2, decA:2, decS:2 },
-  bstr: { base: el('bloomBase'), amp: el('bloomAmp'), spd: el('bloomSpeed'), bOut: el('bloomBaseOut'), aOut: el('bloomAmpOut'), sOut: el('bloomSpeedOut'), min:0, max:2.5, phase:1.75, set:(v)=>{ bloom.strength = v; }, decB:2, decA:2, decS:2 },
-  brad: { base: el('bloomRadBase'), amp: el('bloomRadAmp'), spd: el('bloomRadSpeed'), bOut: el('bloomRadBaseOut'), aOut: el('bloomRadAmpOut'), sOut: el('bloomRadSpeedOut'), min:0, max:1.5, phase:2.50, set:(v)=>{ bloom.radius = v; }, decB:2, decA:2, decS:2 },
+function out(id){ return document.getElementById(id); }
+
+const PARAMS = {
+  hue:  { base: 0.05, min:0,   max:1,   phase:0.00, amp: el('hueAmp'),  aOut: out('hueAmpOut'),  spd: el('hueSpeed'),  sOut: out('hueSpeedOut'),  set:v=>uniforms.uHueShift.value=v },
+  film: { base:360.0, min:100, max:800, phase:0.65, amp: el('filmAmp'), aOut: out('filmAmpOut'), spd: el('filmSpeed'), sOut: out('filmSpeedOut'), set:v=>uniforms.uFilmNm.value=v },
+  edge: { base: 0.70, min:0,   max:2,   phase:1.30, amp: el('edgeAmp'), aOut: out('edgeAmpOut'), spd: el('edgeSpeed'), sOut: out('edgeSpeedOut'), set:v=>uniforms.uEdgeGlow.value=v },
+  refl: { base: 0.25, min:0,   max:1,   phase:2.10, amp: el('reflAmp'), aOut: out('reflAmpOut'), spd: el('reflSpeed'), sOut: out('reflSpeedOut'), set:v=>uniforms.uReflectivity.value=v },
+  spec: { base: 0.70, min:0,   max:2,   phase:0.25, amp: el('specAmp'), aOut: out('specAmpOut'), spd: el('specSpeed'), sOut: out('specSpeedOut'), set:v=>uniforms.uSpecIntensity.value=v },
+  rim:  { base: 0.50, min:0,   max:2,   phase:0.85, amp: el('rimAmp'),  aOut: out('rimAmpOut'),  spd: el('rimSpeed'),  sOut: out('rimSpeedOut'),  set:v=>uniforms.uRimIntensity.value=v },
+  bstr: { base: 0.35, min:0,   max:2.5, phase:1.75, amp: el('bloomAmp'), aOut: out('bloomAmpOut'), spd: el('bloomSpeed'), sOut: out('bloomSpeedOut'), set:v=>{ bloom.strength=v; } },
+  brad: { base: 0.60, min:0,   max:1.5, phase:2.50, amp: el('bloomRadAmp'), aOut: out('bloomRadAmpOut'), spd: el('bloomRadSpeed'), sOut: out('bloomRadSpeedOut'), set:v=>{ bloom.radius=v; } },
 };
 
-/* Helpers to keep outputs in sync */
-function setOut(outEl, value, decimals=2){ outEl.textContent = Number(value).toFixed(decimals); }
-function bindTriplet(p){
-  p.base.addEventListener('input', () => { setOut(p.bOut, p.base.value, p.decB); if(!autoFx.checked) p.set(parseFloat(p.base.value)); });
-  p.amp .addEventListener('input', () => { setOut(p.aOut, p.amp.value, p.decA); });
-  p.spd .addEventListener('input', () => { setOut(p.sOut, p.spd.value, p.decS); });
-  // initialize outputs
-  setOut(p.bOut, p.base.value, p.decB);
-  setOut(p.aOut, p.amp.value,  p.decA);
-  setOut(p.sOut, p.spd.value,  p.decS);
+function setOut(el,val,dec=2){ el.textContent = Number(val).toFixed(dec); }
+function bindPair(p, decA=2, decS=2){
+  const syncA=()=>setOut(p.aOut, p.amp.value, decA);
+  const syncS=()=>setOut(p.sOut, p.spd.value, decS);
+  p.amp.addEventListener('input', ()=>{ syncA(); if(!autoFx.checked) p.set(clamp(p.base + +p.amp.value, p.min, p.max)); });
+  p.spd.addEventListener('input', syncS);
+  syncA(); syncS();
 }
-Object.values(P).forEach(bindTriplet);
+Object.values(PARAMS).forEach(bindPair);
 
 function bindRangeWithOut(rangeEl, outEl, decimals=2, onInput){
-  const sync=()=>{ setOut(outEl, rangeEl.value, decimals); if(onInput) onInput(parseFloat(rangeEl.value)); };
+  const sync=()=>{ outEl.textContent = Number(rangeEl.value).toFixed(decimals); if(onInput) onInput(parseFloat(rangeEl.value)); };
   rangeEl.addEventListener('input', sync); sync();
 }
 
@@ -401,9 +419,11 @@ bindRangeWithOut(progress,    progressOut,    2, v => { drive.progress = v; });
 bindRangeWithOut(globalSpeed, globalSpeedOut, 2, v => { drive.globalSpeed = v; });
 bindRangeWithOut(sectors,     sectorsOut,     0, v => { uniforms.uSectors.value = v; });
 
-/* Toolbar buttons */
-const toggleDrawer = () => { drawer.open = !drawer.open; btnMore.setAttribute('aria-expanded', String(drawer.open)); };
-btnMore.addEventListener('click', toggleDrawer);
+/* Toolbar actions */
+btnMore.addEventListener('click', () => {
+  drawer.open = !drawer.open;
+  btnMore.setAttribute('aria-expanded', drawer.open ? 'true' : 'false');
+});
 
 btnSnap.addEventListener('click', () => {
   renderer.domElement.toBlob((blob) => {
@@ -420,43 +440,34 @@ presetSel.addEventListener('change', () => {
   if (v==='half-vertical-valley') preset_half_vertical_valley();
   else if (v==='diagonal-valley') preset_diagonal_valley();
   else if (v==='gate-valley') preset_gate_valley();
-  camera.position.x += (Math.random()-0.5) * 0.02;
-  camera.position.y += (Math.random()-0.5) * 0.02;
+  // tiny nudge for feedback
+  camera.position.x += (Math.random()-0.5)*0.02;
+  camera.position.y += (Math.random()-0.5)*0.02;
 });
 
-/* ---------- Shader Animation: Base + Amount*sin(t * globalSpeed * Speed + phase) ---------- */
-function osc(base, amp, w, t){ return base + amp * Math.sin(w * t); }
-function updateShaderAnim(t){
+/* ---------- Animation model: base + amount*(sin(...) or 1) ---------- */
+function updateAnimatedParameters(t){
   const g = drive.globalSpeed;
-  if (autoFx.checked){
-    const hue  = clamp(osc(+P.hue.base.value,  +P.hue.amp.value,  g*+P.hue.spd.value,  t + P.hue.phase),  P.hue.min,  P.hue.max);
-    const film = clamp(osc(+P.film.base.value, +P.film.amp.value, g*+P.film.spd.value, t + P.film.phase), P.film.min, P.film.max);
-    const edge = clamp(osc(+P.edge.base.value, +P.edge.amp.value, g*+P.edge.spd.value, t + P.edge.phase), P.edge.min, P.edge.max);
-    const refl = clamp(osc(+P.refl.base.value, +P.refl.amp.value, g*+P.refl.spd.value, t + P.refl.phase), P.refl.min, P.refl.max);
-    const spec = clamp(osc(+P.spec.base.value, +P.spec.amp.value, g*+P.spec.spd.value, t + P.spec.phase), P.spec.min, P.spec.max);
-    const rim  = clamp(osc(+P.rim.base.value,  +P.rim.amp.value,  g*+P.rim.spd.value,  t + P.rim.phase),  P.rim.min,  P.rim.max);
-    const bstr = clamp(osc(+P.bstr.base.value, +P.bstr.amp.value, g*+P.bstr.spd.value, t + P.bstr.phase), P.bstr.min, P.bstr.max);
-    const brad = clamp(osc(+P.brad.base.value, +P.brad.amp.value, g*+P.brad.spd.value, t + P.brad.phase), P.brad.min, P.brad.max);
+  const animOn = autoFx.checked;
 
-    uniforms.uHueShift.value      = hue;
-    uniforms.uFilmNm.value        = film;
-    uniforms.uEdgeGlow.value      = edge;
-    uniforms.uReflectivity.value  = refl;
-    uniforms.uSpecIntensity.value = spec;
-    uniforms.uRimIntensity.value  = rim;
-    bloom.strength = bstr;
-    bloom.radius   = brad;
-  } else {
-    // base only
-    P.hue.set(+P.hue.base.value);
-    P.film.set(+P.film.base.value);
-    P.edge.set(+P.edge.base.value);
-    P.refl.set(+P.refl.base.value);
-    P.spec.set(+P.spec.base.value);
-    P.rim.set(+P.rim.base.value);
-    bloom.strength = +P.bstr.base.value;
-    bloom.radius   = +P.brad.base.value;
+  // helper applying either oscillation or static offset
+  function apply(p){
+    const amp = +p.amp.value;
+    const spd = +p.spd.value;
+    const val = animOn
+      ? p.base + amp * Math.sin(g * spd * t + p.phase)
+      : p.base + amp;
+    p.set(clamp(val, p.min, p.max));
   }
+
+  apply(PARAMS.hue);
+  apply(PARAMS.film);
+  apply(PARAMS.edge);
+  apply(PARAMS.refl);
+  apply(PARAMS.spec);
+  apply(PARAMS.rim);
+  apply(PARAMS.bstr);
+  apply(PARAMS.brad);
 }
 
 /* ---------- Folding ---------- */
@@ -476,6 +487,7 @@ function computeFrames(){
   for (let i=0;i<base.count;i++){
     eff.A[i].copy(base.A[i]); eff.D[i].copy(base.D[i]).normalize();
   }
+  // propagate earlier folds onto later crease frames
   for (let j=0;j<base.count;j++){
     const Aj = eff.A[j]; const Dj = eff.D[j].clone().normalize(); const ang = eff.ang[j]; if (Math.abs(ang)<1e-7) continue;
     for (let k=j+1;k<base.count;k++){
@@ -499,20 +511,19 @@ function pushAll(){ pushToUniforms(); }
 /* ---------- Start ---------- */
 presetSel.value = 'half-vertical-valley';
 presetSel.dispatchEvent(new Event('change'));
-progress.value = String(drive.progress);
 
 /* ---------- Frame loop ---------- */
 function tick(tMs){
-  const t = (tMs * 0.001) * drive.globalSpeed;
+  const t = (tMs * 0.001);
   uniforms.uTime.value = t;
 
   computeAngles();
   computeFrames();
   pushAll();
 
-  updateShaderAnim(t);
+  updateAnimatedParameters(t);
 
-  // Update reflections: hide paper → capture → show (avoids self-reflection)
+  // reflections (hide sheet during capture to avoid self-reflection)
   sheet.visible = false;
   cubeCam.position.copy(sheet.position);
   cubeCam.update(renderer, scene);
