@@ -1,4 +1,7 @@
 // Convex hull (straight edges) + cohesive folding + improved textures + view dropdown.
+// Fixed: Wireframe-only look in shaded/textured → hide EdgesGeometry except in wireframe,
+// and use ShaderMaterial.wireframe for the wireframe view.
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
@@ -34,7 +37,7 @@ controls.dampingFactor = 0.08;
 // ------------------------------------- UI state
 const $ = (id) => document.getElementById(id);
 const state = {
-  viewMode: 'textured',
+  viewMode: 'textured',                                        // 'wireframe' | 'shaded' | 'textured'
   ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12,
   foldStr: 1.0, foldSoft: 0.16, planeCount: 7,
   patMix: 0.55, noiseScale: 2.0, thick: 430, ior: 1.38, bandFreq: 12.0, bandSpeed: 1.10,
@@ -131,6 +134,7 @@ function rebuildHull() {
   mesh = new THREE.Mesh(geom, material);
   scene.add(mesh);
 
+  // Edges overlay (helper) — kept around but hidden unless in "wireframe"
   const eGeo = new THREE.EdgesGeometry(geom, 15);
   const eMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: state.edgeOpacity });
   edgeLines = new THREE.LineSegments(eGeo, eMat);
@@ -164,7 +168,7 @@ function loadPlanes(count) {
 // ------------------------------------- Shader (flat facets + iridescent texture)
 const uniforms = {
   uTime:           { value: 0 },
-  uTexEnabled:     { value: 1.0 },    // 0=shaded, 1=textured
+  uTexEnabled:     { value: 1.0 },    // 0=shaded, 1=textured (mesh visibility controlled separately)
   uFoldStrength:   { value: state.foldStr },
   uFoldSoft:       { value: state.foldSoft },
   uPlaneCount:     { value: state.planeCount },
@@ -185,7 +189,6 @@ uniform int uPlaneCount;
 uniform vec3 uPlanes[${MAX_PLANES}];
 varying vec3 vNormal, vPosView, vPosWorld;
 varying float vCrease;
-
 vec3 reflectPoint(vec3 p, vec3 n, float d){ float s = dot(p,n)+d; return p - 2.0*s*n; }
 vec3 reflectNormal(vec3 nor, vec3 n){ return normalize(nor - 2.0*dot(nor,n)*n); }
 void blendedFold(inout vec3 p, inout vec3 nrm, vec3 n, float d, float strength, float softness, inout float creaseAcc){
@@ -199,15 +202,11 @@ void blendedFold(inout vec3 p, inout vec3 nrm, vec3 n, float d, float strength, 
   creaseAcc = max(creaseAcc,w);
 }
 mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.,s, 0.,1.,0., -s,0.,c); }
-
 void main(){
-  vec3 p = position;
-  vec3 nrm = normal;
-
+  vec3 p = position, nrm = normal;
   float a = uTime * 0.25;
   mat3 R = rotY(a);
   p = R*p; nrm = R*nrm;
-
   float crease = 0.0;
   for(int iter=0; iter<2; iter++){
     for(int i=0; i<${MAX_PLANES}; i++){
@@ -218,7 +217,6 @@ void main(){
       blendedFold(p, nrm, n, d, uFoldStrength, uFoldSoft, crease);
     }
   }
-
   vec4 mv = modelViewMatrix * vec4(p,1.0);
   vPosView = mv.xyz;
   vPosWorld = (modelMatrix*vec4(p,1.0)).xyz;
@@ -231,7 +229,6 @@ void main(){
 const fragmentShader = `
 #extension GL_OES_standard_derivatives : enable
 precision highp float;
-
 uniform float uTime, uTexEnabled, uPatMix, uNoiseScale, uStripeFreq, uStripeMove, uThicknessBase, uIorFilm;
 uniform vec3  uBaseColor;
 varying vec3 vNormal, vPosView, vPosWorld;
@@ -250,7 +247,6 @@ float noise3(vec3 x){
 }
 float fbm(vec3 p){ float s=0., a=0.5; for(int i=0;i<5;i++){ s+=a*noise3(p); p*=2.02; a*=0.5; } return s; }
 float tri(float x){ return abs(fract(x)-0.5)*2.0; }
-
 vec3 thinFilm(float thickness, float n1, float n2, float n3, float cosTheta1){
   const float PI = 3.141592653589793;
   vec3 lambda=vec3(680.,550.,440.);
@@ -260,7 +256,6 @@ vec3 thinFilm(float thickness, float n1, float n2, float n3, float cosTheta1){
   vec3 phase=4.0*PI*n2*thickness*cosTheta2/lambda;
   return 0.5+0.5*cos(phase);
 }
-
 void main(){
   vec3 Ng = normalize(cross(dFdx(vPosWorld), dFdy(vPosWorld)));
   if(dot(Ng, vNormal) < 0.0) Ng = -Ng;
@@ -309,7 +304,7 @@ void main(){
 
 const material = new THREE.ShaderMaterial({
   uniforms, vertexShader, fragmentShader, side: THREE.DoubleSide,
-  extensions: { derivatives: true }
+  transparent: false, wireframe: false // important: start non-wireframe  :contentReference[oaicite:2]{index=2}
 });
 
 // ------------------------------------- Post-processing
@@ -328,30 +323,30 @@ composer.addPass(new OutputPass());
 // ------------------------------------- View modes & initial setup
 function applyViewMode(){
   if (!mesh || !edgeLines) return;
+
+  // Default: show mesh, hide edges overlay; use uTexEnabled to switch shader features.
+  mesh.visible = true;
+  edgeLines.visible = false;
+  material.wireframe = false;
+
   switch (state.viewMode) {
     case 'wireframe':
-      uniforms.uTexEnabled.value = 0.0;
-      mesh.visible = false;
-      edgeLines.visible = true;
-      edgeLines.material.opacity = Math.max(0.5, state.edgeOpacity);
+      // Use ShaderMaterial's built-in wireframe; hide EdgesGeometry.
+      material.wireframe = true;       // GL_LINES rendering of triangles (built-in) :contentReference[oaicite:3]{index=3}
+      edgeLines.visible = false;       // keep outline helper off in this mode
+      uniforms.uTexEnabled.value = 0.0; // shading off for clarity
       break;
     case 'shaded':
-      uniforms.uTexEnabled.value = 0.0;
-      mesh.visible = true;
-      edgeLines.visible = true;
-      edgeLines.material.opacity = state.edgeOpacity;
+      uniforms.uTexEnabled.value = 0.0; // base shading only
       break;
     default:
     case 'textured':
-      uniforms.uTexEnabled.value = 1.0;
-      mesh.visible = true;
-      edgeLines.visible = true;
-      edgeLines.material.opacity = state.edgeOpacity;
+      uniforms.uTexEnabled.value = 1.0; // full material
       break;
   }
 }
 
-loadPlanes(state.planeCount); // **single** loadPlanes
+loadPlanes(state.planeCount);
 
 // populate seeds BEFORE first hull
 updatePoints(0);
@@ -401,8 +396,8 @@ let rebuildAccumulator = 0;
 function animate(){
   const dt = clock.getDelta();
   const t  = (uniforms.uTime.value += dt);
+  afterPass.uniforms['damp'].value = Math.pow(state.after, dt * 60.0);  // consistent trails
 
-  afterPass.uniforms['damp'].value = Math.pow(state.after, dt * 60.0);
   updatePoints(t);
   rebuildAccumulator += dt;
   if (rebuildAccumulator > 0.05) { rebuildHull(); rebuildAccumulator = 0; }
