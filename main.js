@@ -332,7 +332,7 @@ void main(){
   vec3 baseCol = uBaseColor * diff + uBaseColor * rim * 0.15;
 
   if (uTexEnabled < 0.5) {
-    // SHaded mode: no film/textures, keep crease hint subtle.
+    // Shaded mode: no film/textures, keep crease hint subtle.
     vec3 color = baseCol + vCrease * 0.15;
     gl_FragColor = vec4(color, 1.0);
     return;
@@ -422,14 +422,7 @@ function applyViewMode(){
   }
 }
 
-function loadPlanes(count) {
-  const arr = buildPlanes(count);
-  uniforms.uPlaneCount.value = count | 0;
-  for (let i = 0; i < MAX_PLANES; i++) {
-    uniforms.uPlanes.value[i].copy(arr[i % arr.length]);
-  }
-}
-loadPlanes(state.planeCount);
+loadPlanes(state.planeCount);   // ← use the single definition above
 
 // **Important**: populate seeds BEFORE first hull
 updatePoints(0);
