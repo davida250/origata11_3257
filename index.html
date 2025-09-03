@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Prism Fold — Cohesive Polyhedral Hull</title>
+    <title>Prism Fold — Convex Hull, Cohesive Fold</title>
     <meta name="description" content="Dynamic convex hull (straight edges), cohesive folding, thin-film iridescence, subtle ghosting. Three.js + custom shaders." />
     <style>
       :root {
@@ -13,7 +13,14 @@
         --muted: #a0a0a0;
         --accent: #59ffa7;
       }
-      html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; overflow: hidden; }
+      html, body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        overflow: hidden;
+      }
       #app { position: fixed; inset: 0; }
 
       /* Right-side controls */
@@ -119,7 +126,7 @@
 
     <div class="hint">Drag to orbit • Hull = convex of moving points • Subtle ghosting • Flat‑shaded facets</div>
 
-    <!-- Import map + polyfill so bare 'three' and add-ons resolve in the browser -->
+    <!-- Import map + polyfill so bare 'three' & add-ons resolve in the browser -->
     <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.min.js"></script>
     <script type="importmap">
       {
