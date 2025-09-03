@@ -237,6 +237,18 @@
 
     <div class="hint">Drag to orbit. Panel on the right controls fold, iridescence & bloom.</div>
 
+    <!-- Import maps let the browser resolve 'three' and 'three/addons/' -->
+    <!-- Polyfill first for widest support (e.g., some Firefox versions) -->
+    <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
     <script type="module" src="./main.js"></script>
   </body>
 </html>
+
