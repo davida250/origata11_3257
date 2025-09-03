@@ -3,236 +3,240 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Prism Fold — three.js</title>
+    <title>Prism Fold — Three.js</title>
+    <meta name="description" content="Faceted prism with folding geometry and thin‑film iridescence, rendered with Three.js + post-processing." />
     <style>
-      html,body { height: 100%; margin: 0; background: #000; overflow: hidden; }
-      #app { position: fixed; inset: 0; }
+      :root {
+        --panel-w: 300px;
+        --bg: #000;
+        --fg: #e8e8e8;
+        --muted: #a0a0a0;
+        --accent: #59ffa7;
+      }
+      html, body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        overflow: hidden;
+      }
+      #app {
+        position: fixed;
+        inset: 0;
+      }
+
+      /* Right-side controls panel */
+      .panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: var(--panel-w);
+        height: 100%;
+        box-sizing: border-box;
+        padding: 14px 14px 16px 14px;
+        background:
+          radial-gradient(1200px 400px at 10% -10%, rgba(90, 255, 167, 0.05), transparent 60%),
+          rgba(8, 8, 8, 0.72);
+        backdrop-filter: blur(6px);
+        border-left: 1px solid rgba(255,255,255,0.08);
+        overflow: auto;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+      .panel h1 {
+        margin: 6px 0 10px 0;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: .2px;
+      }
+      .panel small { color: var(--muted); }
+      .group {
+        margin: 10px 0 14px;
+        padding: 10px 10px 10px 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        background: rgba(255,255,255,0.02);
+      }
+      .group h2 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        letter-spacing: .4px;
+        text-transform: uppercase;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 90px;
+        grid-gap: 10px;
+        align-items: center;
+        margin: 8px 0;
+      }
+      .row label {
+        display: block;
+        font-size: 13px;
+      }
+      .row .value {
+        text-align: right;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      input[type="range"] {
+        width: 100%;
+        margin: 0;
+        -webkit-appearance: none;
+        background: transparent;
+      }
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 6px;
+        background: linear-gradient(90deg, rgba(255,255,255,.2), rgba(255,255,255,.08));
+        border-radius: 999px;
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 14px; height: 14px;
+        margin-top: -4px;
+        background: var(--fg);
+        border-radius: 50%;
+        border: 0;
+        box-shadow: 0 0 0 2px #000 inset;
+      }
+      input[type="checkbox"] {
+        transform: translateY(2px);
+        accent-color: var(--accent);
+      }
+      .row-2col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-gap: 10px;
+      }
+      .btns {
+        display: flex; gap: 8px; margin-top: 8px;
+      }
+      button {
+        padding: 8px 10px;
+        border: 1px solid rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.06);
+        color: var(--fg);
+        font-weight: 600;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:hover { background: rgba(255,255,255,0.12); }
       .hint {
-        position: fixed; left: 12px; bottom: 12px; color: #a0a0a0; font: 12px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-        background: rgba(0,0,0,.4); padding: 8px 10px; border-radius: 6px; user-select: none;
+        position: fixed;
+        left: 12px;
+        bottom: 12px;
+        color: var(--muted);
+        background: rgba(0,0,0,.35);
+        padding: 6px 8px;
+        border-radius: 6px;
+      }
+
+      /* Make room for the panel on small screens so it can scroll over the canvas */
+      @media (max-width: 720px) {
+        .panel { width: 78vw; }
       }
     </style>
   </head>
+
   <body>
-    <div id="app"></div>
-    <div class="hint">Drag to orbit • Move mouse to “fold” • Wheel = stripes • <kbd>B</kbd> = bloom • <kbd>R</kbd> = reset</div>
-    <script type="module">
-      import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-      import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
-      import { EffectComposer } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
-      import { RenderPass } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
-      import { ShaderPass } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/ShaderPass.js';
-      import { UnrealBloomPass } from 'https://unpkg.com/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
-      import { RGBShiftShader } from 'https://unpkg.com/three@0.160.0/examples/jsm/shaders/RGBShiftShader.js';
+    <div id="app" aria-label="Three.js canvas surface"></div>
 
-      const app = document.getElementById('app');
+    <aside class="panel" aria-label="Controls">
+      <h1>Prism Fold <small>• controls</small></h1>
 
-      const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.2;
-      app.appendChild(renderer.domElement);
+      <div class="group">
+        <h2>Interaction</h2>
+        <div class="row">
+          <label><input id="followMouse" type="checkbox" checked /> Follow mouse fold</label>
+          <div class="value" id="followMouseVal"></div>
+        </div>
+        <div class="row">
+          <label><input id="autoSpin" type="checkbox" checked /> Auto spin</label>
+          <div class="value" id="autoSpinVal"></div>
+        </div>
+        <div class="row">
+          <label>Spin speed</label>
+          <div class="value"><span id="spinSpeedVal">0.002</span></div>
+        </div>
+        <input id="spinSpeed" type="range" min="0" max="0.01" step="0.0001" value="0.002" />
+      </div>
 
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
-      camera.position.set(0, 0, 5);
+      <div class="group">
+        <h2>Folding</h2>
+        <div class="row">
+          <label>Fold amount</label>
+          <div class="value"><span id="foldVal">0.80</span></div>
+        </div>
+        <input id="fold" type="range" min="0.1" max="1.6" step="0.01" value="0.8" />
+      </div>
 
-      const controls = new OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
+      <div class="group">
+        <h2>Bands & Film</h2>
+        <div class="row">
+          <label>Stripe frequency</label>
+          <div class="value"><span id="stripeFreqVal">11.0</span></div>
+        </div>
+        <input id="stripeFreq" type="range" min="2" max="24" step="0.1" value="11" />
+        <div class="row">
+          <label>Stripe speed</label>
+          <div class="value"><span id="stripeSpeedVal">1.25</span></div>
+        </div>
+        <input id="stripeSpeed" type="range" min="0" max="4" step="0.01" value="1.25" />
+        <div class="row">
+          <label>Film thickness (nm)</label>
+          <div class="value"><span id="thicknessVal">420</span></div>
+        </div>
+        <input id="thickness" type="range" min="250" max="650" step="1" value="420" />
+        <div class="row">
+          <label>Film IOR</label>
+          <div class="value"><span id="iorVal">1.38</span></div>
+        </div>
+        <input id="ior" type="range" min="1.25" max="1.55" step="0.001" value="1.38" />
+      </div>
 
-      // Geometry: start with an icosahedron for crisp facets
-      const geo = new THREE.IcosahedronGeometry(1.0, 1);
+      <div class="group">
+        <h2>Post‑FX</h2>
+        <div class="row-2col">
+          <div>
+            <div class="row">
+              <label>Bloom strength</label>
+              <div class="value"><span id="bloomStrengthVal">1.05</span></div>
+            </div>
+            <input id="bloomStrength" type="range" min="0" max="2" step="0.01" value="1.05" />
+          </div>
+          <div>
+            <div class="row">
+              <label>Bloom radius</label>
+              <div class="value"><span id="bloomRadiusVal">0.50</span></div>
+            </div>
+            <input id="bloomRadius" type="range" min="0" max="2" step="0.01" value="0.50" />
+          </div>
+        </div>
 
-      const uniforms = {
-        uTime: { value: 0 },
-        uFold: { value: 0.8 },
-        uStripeFreq: { value: 11.0 },
-        uStripeMove: { value: 1.25 },
-        uThicknessBase: { value: 420.0 }, // nm
-        uIorFilm: { value: 1.38 },
-        uBaseColor: { value: new THREE.Color(0x0a0f08) },
-      };
+        <div class="row">
+          <label>Bloom threshold</label>
+          <div class="value"><span id="bloomThresholdVal">0.15</span></div>
+        </div>
+        <input id="bloomThreshold" type="range" min="0" max="1" step="0.001" value="0.15" />
 
-      const vert = /* glsl */ `#version 300 es
-      precision highp float;
-      uniform float uTime;
-      uniform float uFold;
+        <div class="row">
+          <label>RGB shift amount</label>
+          <div class="value"><span id="rgbAmountVal">0.0015</span></div>
+        </div>
+        <input id="rgbAmount" type="range" min="0" max="0.01" step="0.0001" value="0.0015" />
+      </div>
 
-      in vec3 position;
-      in vec3 normal;
+      <div class="btns">
+        <button id="reset">Reset</button>
+        <button id="toggleBloom">Toggle Bloom</button>
+      </div>
+    </aside>
 
-      uniform mat4 modelMatrix;
-      uniform mat4 modelViewMatrix;
-      uniform mat4 projectionMatrix;
-      uniform mat3 normalMatrix;
+    <div class="hint">Drag to orbit. Panel on the right controls fold, iridescence & bloom.</div>
 
-      out vec3 vNormal;
-      out vec3 vPosView;
-      out vec3 vPosWorld;
-
-      void foldPlane(inout vec3 p, inout vec3 nrm, vec3 pn, float d, float k){
-        float s = dot(p, pn) + d;
-        float m = smoothstep(0.0, 1.0, k * max(-s, 0.0));
-        p -= 2.0*m*s*pn;
-        nrm = normalize(nrm - 2.0*m*dot(nrm, pn)*pn);
-      }
-
-      mat3 rotY(float a){
-        float c = cos(a), s = sin(a);
-        return mat3(c,0.,s, 0.,1.,0., -s,0.,c);
-      }
-
-      void main(){
-        vec3 p = position;
-        vec3 nrm = normal;
-
-        // gentle rotation for life
-        float a = uTime * 0.25;
-        mat3 R = rotY(a);
-        p = R * p;
-        nrm = R * nrm;
-
-        // three animated folding planes
-        vec3 p1 = normalize(vec3(0.7, 0.0, 0.7));
-        vec3 p2 = normalize(vec3(-0.3, 0.9, 0.1));
-        vec3 p3 = normalize(vec3(0.0, 0.7, -0.7));
-        float d = 0.22 * sin(uTime * 0.6);
-
-        foldPlane(p, nrm, p1,  d, uFold);
-        foldPlane(p, nrm, p2, -d, uFold);
-        foldPlane(p, nrm, p3,  d, uFold);
-
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        vPosView = mv.xyz;
-        vPosWorld = (modelMatrix * vec4(p,1.0)).xyz;
-        vNormal = normalize(normalMatrix * nrm);
-
-        gl_Position = projectionMatrix * mv;
-      }
-      `;
-
-      const frag = /* glsl */ `#version 300 es
-      precision highp float;
-
-      uniform float uTime;
-      uniform float uStripeFreq;
-      uniform float uStripeMove;
-      uniform float uThicknessBase;
-      uniform float uIorFilm;
-      uniform vec3  uBaseColor;
-
-      in vec3 vNormal;
-      in vec3 vPosView;
-      in vec3 vPosWorld;
-      out vec4 outColor;
-
-      const float PI = 3.141592653589793;
-
-      vec3 thinFilmIridescence(float thickness, float n1, float n2, float n3, float cosTheta1){
-        // simplified interference term across RGB wavelengths (in nanometers)
-        vec3 lambda = vec3(680.0, 550.0, 440.0);
-        float sinTheta1 = sqrt(max(0.0, 1.0 - cosTheta1*cosTheta1));
-        float sinTheta2 = n1 / n2 * sinTheta1;
-        float cosTheta2 = sqrt(max(0.0, 1.0 - sinTheta2*sinTheta2));
-        vec3 phase = 4.0 * PI * n2 * thickness * cosTheta2 / lambda;
-        // cosine-based interference intensity (approximate)
-        return 0.5 + 0.5 * cos(phase);
-      }
-
-      void main(){
-        vec3 N = normalize(vNormal);
-        vec3 V = normalize(-vPosView);
-        float NdotV = clamp(dot(N, V), 0.0, 1.0);
-
-        // Stripes in object/world space
-        vec3 dir = normalize(vec3(0.7, 0.0, 0.3));
-        float coord = dot(vPosWorld, dir) * uStripeFreq + uTime * uStripeMove;
-        float s = 0.5 + 0.5 * sin(coord);
-        float stripe = smoothstep(0.70, 0.98, s);
-
-        float thickness = uThicknessBase * (0.7 + 0.3 * sin(coord + uTime * 0.5));
-        vec3 film = thinFilmIridescence(thickness, 1.0, uIorFilm, 1.0, NdotV);
-
-        // Simple lambert + fresnel
-        vec3 L = normalize(vec3(0.4, 0.8, 0.2));
-        float diff = max(dot(N, L), 0.0);
-        float f0 = 0.06;
-        float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
-
-        vec3 color = uBaseColor * diff;
-        color = mix(color, film, 0.75);
-        color += film * stripe * 1.5;
-        color += fresnel * film;
-        float rim = pow(1.0 - NdotV, 2.0);
-        color += rim * film * 0.2;
-
-        outColor = vec4(color, 1.0);
-      }
-      `;
-
-      const mat = new THREE.ShaderMaterial({
-        uniforms, vertexShader: vert, fragmentShader: frag, glslVersion: THREE.GLSL3,
-        side: THREE.DoubleSide, transparent: false
-      });
-
-      const mesh = new THREE.Mesh(geo, mat);
-      scene.add(mesh);
-
-      // Postprocessing
-      const composer = new EffectComposer(renderer);
-      const renderPass = new RenderPass(scene, camera);
-      composer.addPass(renderPass);
-
-      const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.05, 0.5, 0.15);
-      composer.addPass(bloomPass);
-
-      const rgbShift = new ShaderPass(RGBShiftShader);
-      rgbShift.uniforms['amount'].value = 0.0015;
-      rgbShift.uniforms['angle'].value = Math.PI / 4;
-      composer.addPass(rgbShift);
-
-      // Interaction
-      let pointerX = 0.5, pointerY = 0.5;
-      window.addEventListener('pointermove', (e) => {
-        pointerX = e.clientX / window.innerWidth;
-        pointerY = e.clientY / window.innerHeight;
-        uniforms.uFold.value = THREE.MathUtils.lerp(0.2, 1.2, pointerX);
-      });
-
-      window.addEventListener('wheel', (e) => {
-        uniforms.uStripeFreq.value = Math.max(2.0, uniforms.uStripeFreq.value + (e.deltaY > 0 ? -0.5 : 0.5));
-      }, { passive: true });
-
-      window.addEventListener('keydown', (e) => {
-        if (e.key.toLowerCase() === 'b') {
-          bloomPass.enabled = !bloomPass.enabled;
-        } else if (e.key.toLowerCase() === 'r') {
-          uniforms.uStripeFreq.value = 11.0;
-          uniforms.uFold.value = 0.8;
-        }
-      });
-
-      // Resize
-      function onResize(){
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        composer.setSize(window.innerWidth, window.innerHeight);
-      }
-      window.addEventListener('resize', onResize);
-
-      // Animate
-      const clock = new THREE.Clock();
-      function animate(){
-        uniforms.uTime.value = clock.getElapsedTime();
-        mesh.rotation.y += 0.002;
-        controls.update();
-        composer.render();
-        requestAnimationFrame(animate);
-      }
-      animate();
-    </script>
+    <script type="module" src="./main.js"></script>
   </body>
 </html>
