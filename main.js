@@ -1,18 +1,19 @@
-// Prism Fold — Cohesive folding, thin-film, subtle ghosting (WebGL1-friendly).
-// Uses ShaderMaterial (built-in attributes/uniforms injected by three.js).
+// Cohesive folding + convex hull (straight edges) + thin-film & "weird" reflections + full-range ghosting.
+// WebGL1-friendly ShaderMaterial (derivatives enabled for flat facets). Imports via import map.
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 
 // -----------------------------------------------------------------------------
-// Renderer
+// Renderer / Scene / Camera
 // -----------------------------------------------------------------------------
 const container = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -24,9 +25,6 @@ renderer.toneMappingExposure = 1.12;
 renderer.debug.checkShaderErrors = true;
 container.appendChild(renderer.domElement);
 
-// -----------------------------------------------------------------------------
-// Scene & Camera
-// -----------------------------------------------------------------------------
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.set(0, 0, 5);
@@ -36,33 +34,92 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
 // -----------------------------------------------------------------------------
-// Geometry (higher tessellation for smoother folds)
+// Dynamic Convex Hull (straight-edged geometry)
 // -----------------------------------------------------------------------------
-const geo = new THREE.IcosahedronGeometry(1.0, 3); // more vertices = nicer folding
+const MAX_POINTS = 40;
+let pointCount = 18;
+let spike = 0.45;
+let animatePts = true;
+let ptSpeed = 0.25;
+
+const seeds = new Array(MAX_POINTS).fill(0).map(() => new THREE.Vector3());
+const base = new Array(MAX_POINTS).fill(0).map(() => new THREE.Vector3());
+
+function reseed(mode = 'random') {
+  const R = 1.0;
+  for (let i = 0; i < MAX_POINTS; i++) {
+    const t = (i / MAX_POINTS) * Math.PI * 2;
+    const ring = new THREE.Vector3(Math.cos(t), 0, Math.sin(t));
+    if (mode === 'regularize') {
+      base[i].copy(ring.multiplyScalar(R));
+    } else {
+      // jittered rings with some vertical distribution
+      base[i].set(
+        (Math.random() * 2 - 1) * R,
+        (Math.random() * 2 - 1) * 0.6,
+        (Math.random() * 2 - 1) * R
+      ).normalize().multiplyScalar(R);
+    }
+  }
+}
+reseed('random');
+
+function updatePoints(t) {
+  for (let i = 0; i < pointCount; i++) {
+    const b = base[i];
+    const amp = spike;                          // spikiness
+    const w = animatePts ? ptSpeed : 0.0;       // angular speed factor
+    const off = i * 0.37;
+    const y = Math.sin(t * w + off) * 0.5;
+    const radial = 1.0 + amp * Math.sin(t * (0.7 + 0.23 * Math.sin(off)) + off * 1.618);
+    seeds[i].set(b.x * radial, b.y + 0.3 * y, b.z * radial);
+  }
+}
+
+// Build / swap hull geometry + edges
+let mesh, edgeLines;
+function rebuildHull() {
+  // dispose previous
+  if (mesh) {
+    mesh.geometry.dispose();
+    scene.remove(mesh);
+  }
+  const pts = seeds.slice(0, pointCount);
+  const geom = new ConvexGeometry(pts); // QuickHull under the hood (straight edges) :contentReference[oaicite:2]{index=2}
+
+  mesh = new THREE.Mesh(geom, material);
+  scene.add(mesh);
+
+  if (edgeLines) {
+    edgeLines.geometry.dispose();
+    scene.remove(edgeLines);
+  }
+  const eGeo = new THREE.EdgesGeometry(geom, 15);
+  const eMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: state.edgeOpacity });
+  edgeLines = new THREE.LineSegments(eGeo, eMat);
+  scene.add(edgeLines);
+}
 
 // -----------------------------------------------------------------------------
-// Symmetry planes: ring + diagonals (gives cohesive starry folds)
+// Symmetry planes for cohesive folding
 // -----------------------------------------------------------------------------
 const MAX_PLANES = 9;
 const planeArray = new Array(MAX_PLANES).fill(0).map(() => new THREE.Vector3());
 
 function buildPlanes(count = 7) {
-  const list = [];
-  // 5 evenly spaced around Y (pentagonal vibe)
+  const arr = [];
   const tilt = 0.35;
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2;
-    const n = new THREE.Vector3(Math.cos(a), tilt, Math.sin(a)).normalize();
-    list.push(n);
+    arr.push(new THREE.Vector3(Math.cos(a), tilt, Math.sin(a)).normalize());
   }
-  // 2 diagonals for cohesion
-  list.push(new THREE.Vector3(1, 1, 1).normalize());
-  list.push(new THREE.Vector3(-1, 1, 1).normalize());
-  // pad / trim to requested count (max 9)
-  while (list.length < count) list.push(new THREE.Vector3(0, 1, 0));
-  return list.slice(0, Math.min(count, MAX_PLANES));
+  arr.push(new THREE.Vector3(1, 1, 1).normalize());
+  arr.push(new THREE.Vector3(-1, 1, 1).normalize());
+  while (arr.length < count) arr.push(new THREE.Vector3(0, 1, 0));
+  return arr.slice(0, Math.min(count, MAX_PLANES));
 }
-function loadPlanesToUniform(count) {
+
+function loadPlanes(count) {
   const arr = buildPlanes(count);
   for (let i = 0; i < MAX_PLANES; i++) planeArray[i].copy(arr[i % arr.length]);
   uniforms.uPlaneCount.value = count | 0;
@@ -70,25 +127,26 @@ function loadPlanesToUniform(count) {
 }
 
 // -----------------------------------------------------------------------------
-// Uniforms & Shaders
+// Shader (GLSL1, flat-shaded facets via derivatives)
 // -----------------------------------------------------------------------------
 const uniforms = {
   uTime:           { value: 0 },
-  // Fold
-  uFoldStrength:   { value: 0.90 },   // overall blend amount
-  uFoldSoft:       { value: 0.18 },   // softness around planes (cohesion)
+  // folding
+  uFoldStrength:   { value: 1.0 },
+  uFoldSoft:       { value: 0.16 },
   uPlaneCount:     { value: 7 },
   uPlanes:         { value: Array.from({ length: MAX_PLANES }, () => new THREE.Vector3()) },
-  // Material
+  // material patterns
+  uPatMix:         { value: 0.55 },  // 0=stripes, 1=noise
+  uNoiseScale:     { value: 2.0 },
   uStripeFreq:     { value: 12.0 },
   uStripeMove:     { value: 1.10 },
-  uThicknessBase:  { value: 430.0 },  // nm
+  uThicknessBase:  { value: 430.0 },
   uIorFilm:        { value: 1.38 },
   uBaseColor:      { value: new THREE.Color(0x0a0f08) }
 };
 
-// Vertex shader — blended reflections across multiple planes (2 iterations).
-// WebGL1: no #version 300 es; rely on built-in position/normal/matrices.
+// Vertex shader: blended plane reflections (two passes) for cohesive folding
 const vertexShader = `
 precision highp float;
 
@@ -101,53 +159,42 @@ uniform vec3  uPlanes[${MAX_PLANES}];
 varying vec3 vNormal;
 varying vec3 vPosView;
 varying vec3 vPosWorld;
-varying float vCrease; // highlight near folds
+varying float vCrease;
 
-// Mirror a point across a plane n·x + d = 0 (here d is animated).
 vec3 reflectPoint(vec3 p, vec3 n, float d){
   float s = dot(p, n) + d;
   return p - 2.0 * s * n;
 }
-// Mirror a normal across plane normal n.
 vec3 reflectNormal(vec3 nor, vec3 n){
   return normalize(nor - 2.0 * dot(nor, n) * n);
 }
-
-// Blend reflection with original based on smooth weight around the plane.
-// This keeps the surface cohesive.
 void blendedFold(inout vec3 p, inout vec3 nrm, vec3 n, float d, float strength, float softness, inout float creaseAcc){
   float s = dot(p, n) + d;
-  float w = exp(-abs(s) / max(1e-3, softness)); // smooth, continuous
+  float w = exp(-abs(s) / max(1e-3, softness));
   w = clamp(w * strength, 0.0, 1.0);
   vec3 pr = reflectPoint(p, n, d);
   vec3 nr = reflectNormal(nrm, n);
   p = mix(p, pr, w);
   nrm = normalize(mix(nrm, nr, w));
-  // accumulate crease indicator (for shading)
   creaseAcc = max(creaseAcc, w);
 }
-
-mat3 rotY(float a){ float c = cos(a), s = sin(a); return mat3(c,0.,s, 0.,1.,0., -s,0.,c); }
+mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.,s, 0.,1.,0., -s,0.,c); }
 
 void main(){
   vec3 p   = position;
   vec3 nrm = normal;
 
-  // gentle rotation for life
   float a = uTime * 0.25;
   mat3 R = rotY(a);
   p = R * p;
   nrm = R * nrm;
 
   float crease = 0.0;
-
-  // Two passes of plane folds = deeper "fold into itself" while cohesive.
-  // Planes drift slightly over time to create breathing motion.
   for(int iter=0; iter<2; iter++){
     for(int i=0; i<${MAX_PLANES}; i++){
       if(i >= uPlaneCount) break;
       vec3 n = normalize(uPlanes[i]);
-      float phase = float(i) * 1.618 + float(iter) * 0.73; // golden-ish offsets
+      float phase = float(i) * 1.618 + float(iter) * 0.73;
       float d = 0.18 * sin(uTime * 0.6 + phase);
       blendedFold(p, nrm, n, d, uFoldStrength, uFoldSoft, crease);
     }
@@ -163,11 +210,15 @@ void main(){
 }
 `;
 
-// Fragment shader — thin-film iridescence + bands + crease/rim emphasis.
+// Fragment shader: thin-film iridescence + noise/stripe hybrid + anisotropic glints.
+// Flat shading via face normal from derivatives (OES_standard_derivatives).
 const fragmentShader = `
+#extension GL_OES_standard_derivatives : enable
 precision highp float;
 
 uniform float uTime;
+uniform float uPatMix;
+uniform float uNoiseScale;
 uniform float uStripeFreq;
 uniform float uStripeMove;
 uniform float uThicknessBase;
@@ -181,7 +232,32 @@ varying float vCrease;
 
 const float PI = 3.141592653589793;
 
-// Thin-film interference (approximate RGB wavelengths)
+// hash/noise utilities (cheap value noise)
+float hash11(float n){ return fract(sin(n)*43758.5453123); }
+float hash31(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7)))*43758.5453123); }
+float noise3(vec3 x){
+  vec3 i = floor(x), f = fract(x);
+  float n = dot(i, vec3(1.0, 57.0, 113.0));
+  float a = hash11(n + 0.0);
+  float b = hash11(n + 1.0);
+  float c = hash11(n + 57.0);
+  float d = hash11(n + 58.0);
+  float e = hash11(n + 113.0);
+  float f1 = hash11(n + 114.0);
+  float g = hash11(n + 170.0);
+  float h = hash11(n + 171.0);
+  vec3 u = f*f*(3.0-2.0*f);
+  float xy1 = mix(mix(a,b,u.x), mix(c,d,u.x), u.y);
+  float xy2 = mix(mix(e,f1,u.x), mix(g,h,u.x), u.y);
+  return mix(xy1, xy2, u.z);
+}
+float fbm(vec3 p){
+  float s = 0.0, a = 0.5;
+  for(int i=0;i<5;i++){ s += a * noise3(p); p *= 2.02; a *= 0.5; }
+  return s;
+}
+
+// thin-film interference (approximate RGB wavelengths)  :contentReference[oaicite:3]{index=3}
 vec3 thinFilmIridescence(float thickness, float n1, float n2, float n3, float cosTheta1){
   vec3 lambda = vec3(680.0, 550.0, 440.0); // nm
   float sinTheta1 = sqrt(max(0.0, 1.0 - cosTheta1*cosTheta1));
@@ -192,36 +268,44 @@ vec3 thinFilmIridescence(float thickness, float n1, float n2, float n3, float co
 }
 
 void main(){
-  vec3 N = normalize(vNormal);
+  // Face normal for flat-shaded facets (straight-edged look)
+  vec3 Ng = normalize(cross(dFdx(vPosWorld), dFdy(vPosWorld)));
+  if(dot(Ng, vNormal) < 0.0) Ng = -Ng;
+  vec3 N = Ng;
+
   vec3 V = normalize(-vPosView);
   float NdotV = clamp(dot(N, V), 0.0, 1.0);
 
-  // Diagonal bands modulating film thickness
+  // Hybrid pattern: diagonal bands + fbm noise (not just stripes)
   vec3 dir = normalize(vec3(0.7, 0.0, 0.3));
   float coord = dot(vPosWorld, dir) * uStripeFreq + uTime * uStripeMove;
-  float s = 0.5 + 0.5 * sin(coord);
-  float stripe = smoothstep(0.72, 0.985, s);
+  float stripes = smoothstep(0.72, 0.985, 0.5 + 0.5*sin(coord));
+  float n = fbm(vPosWorld * uNoiseScale + vec3(0.0, uTime*0.15, 0.0));
+  float pat = mix(stripes, n, uPatMix);
 
-  float thickness = uThicknessBase * (0.72 + 0.28 * sin(coord + uTime * 0.5));
+  // Film thickness varies with pattern → oily, weird reflections
+  float thickness = uThicknessBase * (0.70 + 0.30 * pat);
   vec3 film = thinFilmIridescence(thickness, 1.0, uIorFilm, 1.0, NdotV);
 
   // Simple lighting + fresnel
-  vec3 L = normalize(vec3(0.4, 0.8, 0.2));
+  vec3 L = normalize(vec3(0.35, 0.9, 0.15));
   float diff = max(dot(N, L), 0.0);
   float f0 = 0.06;
   float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
 
+  // Anisotropic "weird" glints based on reflection vector
+  vec3 R = reflect(-V, N);
+  vec3 A1 = normalize(vec3(0.2, 1.0, 0.0));
+  vec3 A2 = normalize(vec3(-0.7, 0.3, 0.6));
+  float aniso = pow(abs(dot(R, A1)), 24.0) + 0.5 * pow(abs(dot(R, A2)), 36.0);
+
+  // Base + film + effects
   vec3 color = uBaseColor * diff;
   color = mix(color, film, 0.75);
-  color += film * stripe * 1.3;
+  color += film * pat * 1.2;
   color += fresnel * film;
-
-  // Crease highlight (subtle) - reads as 'ghost' edges in your refs
-  color += film * vCrease * 0.45;
-
-  // Slight backface glow to enhance cohesion
-  float back = gl_FrontFacing ? 0.0 : 1.0;
-  color += back * film * 0.08;
+  color += aniso * film * 0.45;       // subtle glints
+  color += vCrease * film * 0.35;     // crease highlight near folds
 
   gl_FragColor = vec4(color, 1.0);
 }
@@ -232,27 +316,23 @@ const material = new THREE.ShaderMaterial({
   vertexShader,
   fragmentShader,
   side: THREE.DoubleSide,
-  transparent: false
+  transparent: false,
+  extensions: { derivatives: true } // enables dFdx/dFdy for flat facets
 });
 
-const mesh = new THREE.Mesh(geo, material);
-scene.add(mesh);
+// Mesh placeholders (created in rebuildHull)
+rebuildHull();
 
 // -----------------------------------------------------------------------------
-// Post-processing (Render → Bloom → Afterimage → RGBShift → Output)
+// Post-processing: Render → Bloom → Afterimage (ghosting) → RGBShift → Output
 // -----------------------------------------------------------------------------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 
-const bloomPass = new UnrealBloomPass(
-  new THREE.Vector2(window.innerWidth, window.innerHeight),
-  0.90, // strength (lower by default, can increase from panel)
-  0.45, // radius
-  0.18  // threshold
-);
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.90, 0.45, 0.18);
 composer.addPass(bloomPass);
 
-const afterPass = new AfterimagePass();
+const afterPass = new AfterimagePass(); // exposes 'uniforms.damp' (see examples / forum) :contentReference[oaicite:4]{index=4}
 composer.addPass(afterPass);
 
 const rgbShiftPass = new ShaderPass(RGBShiftShader);
@@ -266,133 +346,116 @@ composer.addPass(new OutputPass());
 // UI wiring
 // -----------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const ui = {
-  followMouse: $('followMouse'),
-  autoSpin: $('autoSpin'),
-  spinSpeed: $('spinSpeed'), spinSpeedVal: $('spinSpeedVal'),
-
-  foldStrength: $('foldStrength'), foldStrengthVal: $('foldStrengthVal'),
-  cohesion: $('cohesion'), cohesionVal: $('cohesionVal'),
-  planeCount: $('planeCount'), planeCountVal: $('planeCountVal'),
-
-  stripeFreq: $('stripeFreq'), stripeFreqVal: $('stripeFreqVal'),
-  stripeSpeed: $('stripeSpeed'), stripeSpeedVal: $('stripeSpeedVal'),
-  thickness: $('thickness'), thicknessVal: $('thicknessVal'),
-  ior: $('ior'), iorVal: $('iorVal'),
-
-  afterBase: $('afterBase'), afterBaseVal: $('afterBaseVal'),
-  rgbAmount: $('rgbAmount'), rgbAmountVal: $('rgbAmountVal'),
-  bloomStrength: $('bloomStrength'), bloomStrengthVal: $('bloomStrengthVal'),
-  bloomRadius: $('bloomRadius'), bloomRadiusVal: $('bloomRadiusVal'),
-  bloomThreshold: $('bloomThreshold'), bloomThresholdVal: $('bloomThresholdVal'),
-
-  reset: $('reset'), toggleBloom: $('toggleBloom')
+const state = {
+  // hull
+  ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12,
+  // fold
+  foldStr: 1.0, foldSoft: 0.16, planeCount: 7,
+  // material
+  patMix: 0.55, noiseScale: 2.0, thick: 430, ior: 1.38, bandFreq: 12.0, bandSpeed: 1.10,
+  // fx
+  after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18
 };
 
-const defaults = {
-  followMouse: true,
-  autoSpin: true,
-  spinSpeed: 0.002,
-
-  foldStrength: 0.90,
-  cohesion: 0.18,
-  planeCount: 7,
-
-  stripeFreq: 12.0,
-  stripeSpeed: 1.10,
-  thickness: 430,
-  ior: 1.38,
-
-  afterBase: 0.96,       // base damp; per-frame adjusted for FPS consistency
-  rgbAmount: 0.0010,
-  bloomStrength: 0.90,
-  bloomRadius: 0.45,
-  bloomThreshold: 0.18
-};
-const state = { ...defaults };
-
-function setVal(el, v, digits=2){ el.textContent = (typeof v === 'number') ? v.toFixed(digits) : String(v); }
+function setVal(id, v, d=2){ $(id).textContent = (typeof v === 'number') ? v.toFixed(d) : String(v); }
 function syncUI(){
-  $('followMouse').checked = state.followMouse;
-  $('autoSpin').checked = state.autoSpin;
-  $('spinSpeed').value = state.spinSpeed; setVal($('spinSpeedVal'), state.spinSpeed, 4);
+  $('#ptCount').value = state.ptCount; setVal('ptCountVal', state.ptCount, 0);
+  $('#spike').value = state.spike; setVal('spikeVal', state.spike, 2);
+  $('#animatePts').checked = state.animatePts;
+  $('#ptSpeed').value = state.ptSpeed; setVal('ptSpeedVal', state.ptSpeed, 2);
+  $('#edgeOpacity').value = state.edgeOpacity; setVal('edgeOpacityVal', state.edgeOpacity, 2);
 
-  $('foldStrength').value = state.foldStrength; setVal($('foldStrengthVal'), state.foldStrength);
-  $('cohesion').value = state.cohesion; setVal($('cohesionVal'), state.cohesion, 2);
-  $('planeCount').value = state.planeCount; setVal($('planeCountVal'), state.planeCount, 0);
+  $('#foldStr').value = state.foldStr; setVal('foldStrVal', state.foldStr);
+  $('#foldSoft').value = state.foldSoft; setVal('foldSoftVal', state.foldSoft, 2);
+  $('#planeCount').value = state.planeCount; setVal('planeCountVal', state.planeCount, 0);
 
-  $('stripeFreq').value = state.stripeFreq; setVal($('stripeFreqVal'), state.stripeFreq, 1);
-  $('stripeSpeed').value = state.stripeSpeed; setVal($('stripeSpeedVal'), state.stripeSpeed, 2);
-  $('thickness').value = state.thickness; setVal($('thicknessVal'), state.thickness, 0);
-  $('ior').value = state.ior; setVal($('iorVal'), state.ior, 3);
+  $('#patMix').value = state.patMix; setVal('patMixVal', state.patMix, 2);
+  $('#noiseScale').value = state.noiseScale; setVal('noiseScaleVal', state.noiseScale, 2);
+  $('#thick').value = state.thick; setVal('thickVal', state.thick, 0);
+  $('#ior').value = state.ior; setVal('iorVal', state.ior, 3);
+  $('#bandFreq').value = state.bandFreq; setVal('bandFreqVal', state.bandFreq, 1);
+  $('#bandSpeed').value = state.bandSpeed; setVal('bandSpeedVal', state.bandSpeed, 2);
 
-  $('afterBase').value = state.afterBase; setVal($('afterBaseVal'), state.afterBase, 3);
-  $('rgbAmount').value = state.rgbAmount; setVal($('rgbAmountVal'), state.rgbAmount, 4);
-  $('bloomStrength').value = state.bloomStrength; setVal($('bloomStrengthVal'), state.bloomStrength, 2);
-  $('bloomRadius').value = state.bloomRadius; setVal($('bloomRadiusVal'), state.bloomRadius, 2);
-  $('bloomThreshold').value = state.bloomThreshold; setVal($('bloomThresholdVal'), state.bloomThreshold, 2);
+  $('#after').value = state.after; setVal('afterVal', state.after, 4);
+  $('#rgb').value = state.rgb; setVal('rgbVal', state.rgb, 4);
+  $('#bloomStr').value = state.bloomStr; setVal('bloomStrVal', state.bloomStr, 2);
+  $('#bloomRad').value = state.bloomRad; setVal('bloomRadVal', state.bloomRad, 2);
+  $('#bloomThr').value = state.bloomThr; setVal('bloomThrVal', state.bloomThr, 2);
 }
 function applyState(){
-  uniforms.uFoldStrength.value = state.foldStrength;
-  uniforms.uFoldSoft.value     = state.cohesion;
-  loadPlanesToUniform(state.planeCount);
+  pointCount = state.ptCount;
+  spike      = state.spike;
+  animatePts = state.animatePts;
+  ptSpeed    = state.ptSpeed;
+  if (edgeLines) edgeLines.material.opacity = state.edgeOpacity;
 
-  uniforms.uStripeFreq.value    = state.stripeFreq;
-  uniforms.uStripeMove.value    = state.stripeSpeed;
-  uniforms.uThicknessBase.value = state.thickness;
+  uniforms.uFoldStrength.value = state.foldStr;
+  uniforms.uFoldSoft.value     = state.foldSoft;
+  loadPlanes(state.planeCount);
+
+  uniforms.uPatMix.value        = state.patMix;
+  uniforms.uNoiseScale.value    = state.noiseScale;
+  uniforms.uStripeFreq.value    = state.bandFreq;
+  uniforms.uStripeMove.value    = state.bandSpeed;
+  uniforms.uThicknessBase.value = state.thick;
   uniforms.uIorFilm.value       = state.ior;
 
-  bloomPass.strength  = state.bloomStrength;
-  bloomPass.radius    = state.bloomRadius;
-  bloomPass.threshold = state.bloomThreshold;
-
-  rgbShiftPass.uniforms['amount'].value = state.rgbAmount;
+  bloomPass.strength  = state.bloomStr;
+  bloomPass.radius    = state.bloomRad;
+  bloomPass.threshold = state.bloomThr;
+  rgbShiftPass.uniforms['amount'].value = state.rgb;
 }
 syncUI(); applyState();
 
-// Controls
-$('followMouse').addEventListener('change', () => state.followMouse = $('followMouse').checked);
-$('autoSpin').addEventListener('change',   () => state.autoSpin   = $('autoSpin').checked);
-$('spinSpeed').addEventListener('input', () => { state.spinSpeed = parseFloat($('spinSpeed').value); setVal($('spinSpeedVal'), state.spinSpeed, 4); });
+$('#ptCount').addEventListener('input', () => { state.ptCount = parseInt($('#ptCount').value,10); setVal('ptCountVal', state.ptCount, 0); rebuildHull(); });
+$('#spike').addEventListener('input', () => { state.spike = parseFloat($('#spike').value); setVal('spikeVal', state.spike, 2); });
+$('#animatePts').addEventListener('change', () => { state.animatePts = $('#animatePts').checked; });
+$('#ptSpeed').addEventListener('input', () => { state.ptSpeed = parseFloat($('#ptSpeed').value); setVal('ptSpeedVal', state.ptSpeed, 2); });
+$('#edgeOpacity').addEventListener('input', () => { state.edgeOpacity = parseFloat($('#edgeOpacity').value); setVal('edgeOpacityVal', state.edgeOpacity, 2); if(edgeLines) edgeLines.material.opacity = state.edgeOpacity; });
 
-$('foldStrength').addEventListener('input', () => { state.foldStrength = parseFloat($('foldStrength').value); setVal($('foldStrengthVal'), state.foldStrength); applyState(); });
-$('cohesion').addEventListener('input', () => { state.cohesion = parseFloat($('cohesion').value); setVal($('cohesionVal'), state.cohesion, 2); applyState(); });
-$('planeCount').addEventListener('input', () => { state.planeCount = parseInt($('planeCount').value, 10); setVal($('planeCountVal'), state.planeCount, 0); applyState(); });
+$('#reseed').addEventListener('click', () => { reseed('random'); rebuildHull(); });
+$('#regularize').addEventListener('click', () => { reseed('regularize'); rebuildHull(); });
 
-$('stripeFreq').addEventListener('input', () => { state.stripeFreq = parseFloat($('stripeFreq').value); setVal($('stripeFreqVal'), state.stripeFreq, 1); applyState(); });
-$('stripeSpeed').addEventListener('input', () => { state.stripeSpeed = parseFloat($('stripeSpeed').value); setVal($('stripeSpeedVal'), state.stripeSpeed, 2); applyState(); });
-$('thickness').addEventListener('input', () => { state.thickness = parseFloat($('thickness').value); setVal($('thicknessVal'), state.thickness, 0); applyState(); });
-$('ior').addEventListener('input', () => { state.ior = parseFloat($('ior').value); setVal($('iorVal'), state.ior, 3); applyState(); });
+$('#foldStr').addEventListener('input', () => { state.foldStr = parseFloat($('#foldStr').value); setVal('foldStrVal', state.foldStr); applyState(); });
+$('#foldSoft').addEventListener('input', () => { state.foldSoft = parseFloat($('#foldSoft').value); setVal('foldSoftVal', state.foldSoft, 2); applyState(); });
+$('#planeCount').addEventListener('input', () => { state.planeCount = parseInt($('#planeCount').value,10); setVal('planeCountVal', state.planeCount, 0); applyState(); });
 
-$('afterBase').addEventListener('input', () => { state.afterBase = parseFloat($('afterBase').value); setVal($('afterBaseVal'), state.afterBase, 3); });
-$('rgbAmount').addEventListener('input', () => { state.rgbAmount = parseFloat($('rgbAmount').value); setVal($('rgbAmountVal'), state.rgbAmount, 4); applyState(); });
-$('bloomStrength').addEventListener('input', () => { state.bloomStrength = parseFloat($('bloomStrength').value); setVal($('bloomStrengthVal'), state.bloomStrength, 2); applyState(); });
-$('bloomRadius').addEventListener('input', () => { state.bloomRadius = parseFloat($('bloomRadius').value); setVal($('bloomRadiusVal'), state.bloomRadius, 2); applyState(); });
-$('bloomThreshold').addEventListener('input', () => { state.bloomThreshold = parseFloat($('bloomThreshold').value); setVal($('bloomThresholdVal'), state.bloomThreshold, 2); applyState(); });
+$('#patMix').addEventListener('input', () => { state.patMix = parseFloat($('#patMix').value); setVal('patMixVal', state.patMix, 2); applyState(); });
+$('#noiseScale').addEventListener('input', () => { state.noiseScale = parseFloat($('#noiseScale').value); setVal('noiseScaleVal', state.noiseScale, 2); applyState(); });
+$('#thick').addEventListener('input', () => { state.thick = parseFloat($('#thick').value); setVal('thickVal', state.thick, 0); applyState(); });
+$('#ior').addEventListener('input', () => { state.ior = parseFloat($('#ior').value); setVal('iorVal', state.ior, 3); applyState(); });
+$('#bandFreq').addEventListener('input', () => { state.bandFreq = parseFloat($('#bandFreq').value); setVal('bandFreqVal', state.bandFreq, 1); applyState(); });
+$('#bandSpeed').addEventListener('input', () => { state.bandSpeed = parseFloat($('#bandSpeed').value); setVal('bandSpeedVal', state.bandSpeed, 2); applyState(); });
 
-$('reset').addEventListener('click', () => { Object.assign(state, defaults); syncUI(); applyState(); });
-$('toggleBloom').addEventListener('click', () => { bloomPass.enabled = !bloomPass.enabled; });
+$('#after').addEventListener('input', () => { state.after = parseFloat($('#after').value); setVal('afterVal', state.after, 4); });
+$('#rgb').addEventListener('input', () => { state.rgb = parseFloat($('#rgb').value); setVal('rgbVal', state.rgb, 4); rgbShiftPass.uniforms['amount'].value = state.rgb; });
+$('#bloomStr').addEventListener('input', () => { state.bloomStr = parseFloat($('#bloomStr').value); setVal('bloomStrVal', state.bloomStr, 2); applyState(); });
+$('#bloomRad').addEventListener('input', () => { state.bloomRad = parseFloat($('#bloomRad').value); setVal('bloomRadVal', state.bloomRad, 2); applyState(); });
+$('#bloomThr').addEventListener('input', () => { state.bloomThr = parseFloat($('#bloomThr').value); setVal('bloomThrVal', state.bloomThr, 2); applyState(); });
 
-// Pointer → fold strength modulation (kept very subtle to preserve cohesion)
+$('#reset').addEventListener('click', () => {
+  Object.assign(state, {
+    ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12,
+    foldStr: 1.0, foldSoft: 0.16, planeCount: 7,
+    patMix: 0.55, noiseScale: 2.0, thick: 430, ior: 1.38, bandFreq: 12.0, bandSpeed: 1.10,
+    after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18
+  });
+  syncUI(); applyState(); rebuildHull();
+});
+$('#toggleBloom').addEventListener('click', () => { bloomPass.enabled = !bloomPass.enabled; });
+
+// Pointer gently modulates fold strength (kept subtle)
 renderer.domElement.addEventListener('pointermove', (e) => {
-  if (!state.followMouse) return;
+  if (!state.animatePts) return;
   const rect = renderer.domElement.getBoundingClientRect();
   const x = (e.clientX - rect.left) / rect.width;
-  uniforms.uFoldStrength.value = THREE.MathUtils.lerp(0.5, 1.25, THREE.MathUtils.clamp(x, 0, 1));
-  $('foldStrength').value = uniforms.uFoldStrength.value;
-  setVal($('foldStrengthVal'), uniforms.uFoldStrength.value);
+  uniforms.uFoldStrength.value = THREE.MathUtils.lerp(0.6, 1.3, THREE.MathUtils.clamp(x, 0, 1));
+  $('#foldStr').value = uniforms.uFoldStrength.value;
+  setVal('foldStrVal', uniforms.uFoldStrength.value);
 });
 
-// Wheel → quick band density tweak
-renderer.domElement.addEventListener('wheel', (e) => {
-  const delta = e.deltaY > 0 ? -0.5 : 0.5;
-  state.stripeFreq = THREE.MathUtils.clamp(state.stripeFreq + delta, 2, 24);
-  $('stripeFreq').value = state.stripeFreq; setVal($('stripeFreqVal'), state.stripeFreq, 1);
-  applyState();
-}, { passive: true });
-
 // -----------------------------------------------------------------------------
-// Resize & Animate (framerate-aware afterimage damp)
+// Resize & Animate
 // -----------------------------------------------------------------------------
 function onResize(){
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -403,22 +466,25 @@ function onResize(){
 window.addEventListener('resize', onResize);
 
 const clock = new THREE.Clock();
+rebuildHull(); // initial hull built once
+loadPlanes(state.planeCount);
+
 function animate(){
   const dt = clock.getDelta();
-  uniforms.uTime.value += dt;
+  const t  = (uniforms.uTime.value += dt);
 
-  // framerate-independent ghosting: adjust damp per-frame around a 60Hz base
-  const base = state.afterBase; // e.g. 0.96
-  const dampThisFrame = Math.pow(base, dt * 60.0);
-  // AfterimagePass exposes a 'uniforms' bag in examples; set it here.
+  // Framerate-aware ghosting: consistent trail length across refresh rates. :contentReference[oaicite:5]{index=5}
+  // AfterimagePass expects a 'damp' in [0..~1]. We adjust per-frame.
+  const dampThisFrame = Math.pow(state.after, dt * 60.0);
   afterPass.uniforms['damp'].value = dampThisFrame;
 
-  if (state.autoSpin) mesh.rotation.y += state.spinSpeed;
-  controls.update();
+  // Update hull points and rebuild geometry at a modest cadence
+  updatePoints(t);
+  rebuildHull();
+
+  // Spin + render
+  if (controls.enabled) controls.update();
   composer.render();
   requestAnimationFrame(animate);
 }
 animate();
-
-// Initialize plane uniforms
-loadPlanesToUniform(state.planeCount);
