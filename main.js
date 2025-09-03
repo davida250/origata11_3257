@@ -1,6 +1,5 @@
-// Prism Fold — Three.js
+// Prism Fold — Three.js (WebGL1-compatible shaders)
 // Faceted geometry "folding in on itself" with thin‑film iridescence and post‑FX.
-// Author: (you) — MIT License
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -11,36 +10,32 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 
-// -----------------------------------------------------------------------------
-// Renderer
-// -----------------------------------------------------------------------------
+// --- renderer --------------------------------------------------------------
 const container = document.getElementById('app');
-
 const renderer = new THREE.WebGLRenderer({
-  antialias: false,            // post-processing chain prefers this off
+  antialias: false,
   powerPreference: 'high-performance'
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;  // sRGB output (composer + OutputPass will respect this)
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.2;
+renderer.debug.checkShaderErrors = true; // helpful if something goes wrong
 container.appendChild(renderer.domElement);
 
-// -----------------------------------------------------------------------------
-// Scene & Camera
-// -----------------------------------------------------------------------------
+// --- scene & camera --------------------------------------------------------
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(
+  45, window.innerWidth / window.innerHeight, 0.1, 100
+);
 camera.position.set(0, 0, 5);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
-// -----------------------------------------------------------------------------
-// Geometry + Shader material
-// -----------------------------------------------------------------------------
+// --- geometry + shaders ----------------------------------------------------
 const geo = new THREE.IcosahedronGeometry(1.0, 1);
 
 const uniforms = {
@@ -48,28 +43,29 @@ const uniforms = {
   uFold:           { value: 0.8 },
   uStripeFreq:     { value: 11.0 },
   uStripeMove:     { value: 1.25 },
-  uThicknessBase:  { value: 420.0 },  // nanometers
+  uThicknessBase:  { value: 420.0 },  // nm
   uIorFilm:        { value: 1.38 },
   uBaseColor:      { value: new THREE.Color(0x0a0f08) }
 };
 
-const vertexShader = /* glsl */ `#version 300 es
+// GLSL 1.00 versions (no "#version 300 es") for WebGL1 compatibility.
+const vertexShader = `
 precision highp float;
 
 uniform float uTime;
 uniform float uFold;
 
-in vec3 position;
-in vec3 normal;
+attribute vec3 position;
+attribute vec3 normal;
 
 uniform mat4 modelMatrix;
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform mat3 normalMatrix;
 
-out vec3 vNormal;
-out vec3 vPosView;
-out vec3 vPosWorld;
+varying vec3 vNormal;
+varying vec3 vPosView;
+varying vec3 vPosWorld;
 
 void foldPlane(inout vec3 p, inout vec3 nrm, vec3 pn, float d, float k){
   float s = dot(p, pn) + d;
@@ -112,7 +108,7 @@ void main(){
 }
 `;
 
-const fragmentShader = /* glsl */ `#version 300 es
+const fragmentShader = `
 precision highp float;
 
 uniform float uTime;
@@ -122,11 +118,9 @@ uniform float uThicknessBase;
 uniform float uIorFilm;
 uniform vec3  uBaseColor;
 
-in vec3 vNormal;
-in vec3 vPosView;
-in vec3 vPosWorld;
-
-out vec4 outColor;
+varying vec3 vNormal;
+varying vec3 vPosView;
+varying vec3 vPosWorld;
 
 const float PI = 3.141592653589793;
 
@@ -166,7 +160,7 @@ void main(){
   color += fresnel * film;
   color += pow(1.0 - NdotV, 2.0) * film * 0.2;
 
-  outColor = vec4(color, 1.0);
+  gl_FragColor = vec4(color, 1.0);
 }
 `;
 
@@ -174,7 +168,7 @@ const material = new THREE.ShaderMaterial({
   uniforms,
   vertexShader,
   fragmentShader,
-  glslVersion: THREE.GLSL3,
+  // GLSL1 by default; no glslVersion set → works on WebGL1 renderers
   side: THREE.DoubleSide,
   transparent: false
 });
@@ -182,12 +176,9 @@ const material = new THREE.ShaderMaterial({
 const mesh = new THREE.Mesh(geo, material);
 scene.add(mesh);
 
-// -----------------------------------------------------------------------------
-// Post‑processing (EffectComposer → RenderPass → Bloom → RGBShift → OutputPass)
-// -----------------------------------------------------------------------------
+// --- post-processing -------------------------------------------------------
 const composer = new EffectComposer(renderer);
-const renderPass = new RenderPass(scene, camera);
-composer.addPass(renderPass);
+composer.addPass(new RenderPass(scene, camera));
 
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -197,18 +188,14 @@ const bloomPass = new UnrealBloomPass(
 );
 composer.addPass(bloomPass);
 
-const rgbShiftPass = new ShaderPass(RGBShiftShader);
-rgbShiftPass.uniforms['amount'].value = 0.0015;
-rgbShiftPass.uniforms['angle'].value  = Math.PI / 4;
-composer.addPass(rgbShiftPass);
+const rgbShift = new ShaderPass(RGBShiftShader);
+rgbShift.uniforms.amount.value = 0.0015;
+rgbShift.uniforms.angle.value  = Math.PI / 4;
+composer.addPass(rgbShift);
 
-// IMPORTANT: apply renderer.toneMapping + color‑space in post
-const outputPass = new OutputPass();
-composer.addPass(outputPass);
+composer.addPass(new OutputPass()); // ensures tone mapping & output color space
 
-// -----------------------------------------------------------------------------
-// UI wiring
-// -----------------------------------------------------------------------------
+// --- UI wiring -------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const ui = {
   followMouse: $('followMouse'),
@@ -241,7 +228,6 @@ const defaults = {
   bloomThreshold: 0.15,
   rgbAmount: 0.0015
 };
-
 const state = { ...defaults };
 
 function setVal(el, v, digits=2) { el.textContent = (typeof v === 'number') ? v.toFixed(digits) : String(v); }
@@ -251,7 +237,6 @@ function syncUI() {
   ui.spinSpeed.value = state.spinSpeed; setVal(ui.spinSpeedVal, state.spinSpeed, 4);
 
   ui.fold.value = state.fold; setVal(ui.foldVal, state.fold);
-
   ui.stripeFreq.value = state.stripeFreq; setVal(ui.stripeFreqVal, state.stripeFreq, 1);
   ui.stripeSpeed.value = state.stripeSpeed; setVal(ui.stripeSpeedVal, state.stripeSpeed, 2);
 
@@ -264,8 +249,6 @@ function syncUI() {
 
   ui.rgbAmount.value = state.rgbAmount; setVal(ui.rgbAmountVal, state.rgbAmount, 4);
 }
-syncUI();
-
 function applyStateToScene() {
   uniforms.uFold.value          = state.fold;
   uniforms.uStripeFreq.value    = state.stripeFreq;
@@ -277,103 +260,46 @@ function applyStateToScene() {
   bloomPass.radius    = state.bloomRadius;
   bloomPass.threshold = state.bloomThreshold;
 
-  rgbShiftPass.uniforms['amount'].value = state.rgbAmount;
+  rgbShift.uniforms.amount.value = state.rgbAmount;
 }
-applyStateToScene();
+syncUI(); applyStateToScene();
 
 ui.followMouse.addEventListener('change', () => { state.followMouse = ui.followMouse.checked; });
 ui.autoSpin.addEventListener('change',   () => { state.autoSpin   = ui.autoSpin.checked; });
+ui.spinSpeed.addEventListener('input', () => { state.spinSpeed = parseFloat(ui.spinSpeed.value); setVal(ui.spinSpeedVal, state.spinSpeed, 4); });
 
-ui.spinSpeed.addEventListener('input', () => {
-  state.spinSpeed = parseFloat(ui.spinSpeed.value);
-  setVal(ui.spinSpeedVal, state.spinSpeed, 4);
-});
+ui.fold.addEventListener('input', () => { state.fold = parseFloat(ui.fold.value); setVal(ui.foldVal, state.fold); applyStateToScene(); });
+ui.stripeFreq.addEventListener('input', () => { state.stripeFreq = parseFloat(ui.stripeFreq.value); setVal(ui.stripeFreqVal, state.stripeFreq, 1); applyStateToScene(); });
+ui.stripeSpeed.addEventListener('input', () => { state.stripeSpeed = parseFloat(ui.stripeSpeed.value); setVal(ui.stripeSpeedVal, state.stripeSpeed, 2); applyStateToScene(); });
+ui.thickness.addEventListener('input', () => { state.thickness = parseFloat(ui.thickness.value); setVal(ui.thicknessVal, state.thickness, 0); applyStateToScene(); });
+ui.ior.addEventListener('input', () => { state.ior = parseFloat(ui.ior.value); setVal(ui.iorVal, state.ior, 3); applyStateToScene(); });
+ui.bloomStrength.addEventListener('input', () => { state.bloomStrength = parseFloat(ui.bloomStrength.value); setVal(ui.bloomStrengthVal, state.bloomStrength, 2); applyStateToScene(); });
+ui.bloomRadius.addEventListener('input', () => { state.bloomRadius = parseFloat(ui.bloomRadius.value); setVal(ui.bloomRadiusVal, state.bloomRadius, 2); applyStateToScene(); });
+ui.bloomThreshold.addEventListener('input', () => { state.bloomThreshold = parseFloat(ui.bloomThreshold.value); setVal(ui.bloomThresholdVal, state.bloomThreshold, 2); applyStateToScene(); });
+ui.rgbAmount.addEventListener('input', () => { state.rgbAmount = parseFloat(ui.rgbAmount.value); setVal(ui.rgbAmountVal, state.rgbAmount, 4); applyStateToScene(); });
 
-ui.fold.addEventListener('input', () => {
-  state.fold = parseFloat(ui.fold.value);
-  setVal(ui.foldVal, state.fold);
-  applyStateToScene();
-});
+ui.reset.addEventListener('click', () => { Object.assign(state, defaults); syncUI(); applyStateToScene(); });
+ui.toggleBloom.addEventListener('click', () => { bloomPass.enabled = !bloomPass.enabled; });
 
-ui.stripeFreq.addEventListener('input', () => {
-  state.stripeFreq = parseFloat(ui.stripeFreq.value);
-  setVal(ui.stripeFreqVal, state.stripeFreq, 1);
-  applyStateToScene();
-});
-ui.stripeSpeed.addEventListener('input', () => {
-  state.stripeSpeed = parseFloat(ui.stripeSpeed.value);
-  setVal(ui.stripeSpeedVal, state.stripeSpeed, 2);
-  applyStateToScene();
-});
-
-ui.thickness.addEventListener('input', () => {
-  state.thickness = parseFloat(ui.thickness.value);
-  setVal(ui.thicknessVal, state.thickness, 0);
-  applyStateToScene();
-});
-ui.ior.addEventListener('input', () => {
-  state.ior = parseFloat(ui.ior.value);
-  setVal(ui.iorVal, state.ior, 3);
-  applyStateToScene();
-});
-
-ui.bloomStrength.addEventListener('input', () => {
-  state.bloomStrength = parseFloat(ui.bloomStrength.value);
-  setVal(ui.bloomStrengthVal, state.bloomStrength, 2);
-  applyStateToScene();
-});
-ui.bloomRadius.addEventListener('input', () => {
-  state.bloomRadius = parseFloat(ui.bloomRadius.value);
-  setVal(ui.bloomRadiusVal, state.bloomRadius, 2);
-  applyStateToScene();
-});
-ui.bloomThreshold.addEventListener('input', () => {
-  state.bloomThreshold = parseFloat(ui.bloomThreshold.value);
-  setVal(ui.bloomThresholdVal, state.bloomThreshold, 2);
-  applyStateToScene();
-});
-
-ui.rgbAmount.addEventListener('input', () => {
-  state.rgbAmount = parseFloat(ui.rgbAmount.value);
-  setVal(ui.rgbAmountVal, state.rgbAmount, 4);
-  applyStateToScene();
-});
-
-ui.reset.addEventListener('click', () => {
-  Object.assign(state, defaults);
-  syncUI();
-  applyStateToScene();
-});
-
-ui.toggleBloom.addEventListener('click', () => {
-  bloomPass.enabled = !bloomPass.enabled;
-});
-
-// Pointer → fold amount (if enabled)
-let pointerX = 0.5;
+// pointer → fold amount (if enabled)
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (!state.followMouse) return;
   const rect = renderer.domElement.getBoundingClientRect();
-  pointerX = (e.clientX - rect.left) / rect.width;
-  state.fold = THREE.MathUtils.lerp(0.2, 1.4, THREE.MathUtils.clamp(pointerX, 0, 1));
-  ui.fold.value = state.fold;
-  setVal(ui.foldVal, state.fold);
+  const x = (e.clientX - rect.left) / rect.width;
+  state.fold = THREE.MathUtils.lerp(0.2, 1.4, THREE.MathUtils.clamp(x, 0, 1));
+  ui.fold.value = state.fold; ui.foldVal.textContent = state.fold.toFixed(2);
   applyStateToScene();
 });
-
-// Optional: wheel on canvas adjusts stripes
+// wheel on canvas adjusts stripes
 renderer.domElement.addEventListener('wheel', (e) => {
   const delta = e.deltaY > 0 ? -0.5 : 0.5;
   state.stripeFreq = THREE.MathUtils.clamp(state.stripeFreq + delta, 2, 24);
-  ui.stripeFreq.value = state.stripeFreq;
-  setVal(ui.stripeFreqVal, state.stripeFreq, 1);
+  ui.stripeFreq.value = state.stripeFreq; ui.stripeFreqVal.textContent = state.stripeFreq.toFixed(1);
   applyStateToScene();
 }, { passive: true });
 
-// -----------------------------------------------------------------------------
-// Resize & animate
-// -----------------------------------------------------------------------------
-function onResize() {
+// --- resize & animate -------------------------------------------------------
+function onResize(){
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -382,17 +308,10 @@ function onResize() {
 window.addEventListener('resize', onResize);
 
 const clock = new THREE.Clock();
-function animate() {
-  const t = clock.getElapsedTime();
-  uniforms.uTime.value = t;
-
-  if (state.autoSpin) {
-    mesh.rotation.y += state.spinSpeed;
-  }
-
+(function animate(){
+  uniforms.uTime.value = clock.getElapsedTime();
+  if (state.autoSpin) mesh.rotation.y += state.spinSpeed;
   controls.update();
   composer.render();
   requestAnimationFrame(animate);
-}
-animate();
-
+})();
