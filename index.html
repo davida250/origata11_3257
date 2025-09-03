@@ -7,7 +7,7 @@
     <meta name="description" content="Dynamic convex hull (straight edges), cohesive folding, thin-film iridescence, subtle ghosting. Three.js + custom shaders." />
     <style>
       :root {
-        --panel-w: 340px;
+        --panel-w: 360px;
         --bg: #000;
         --fg: #e8e8e8;
         --muted: #a0a0a0;
@@ -35,7 +35,7 @@
       .panel small { color: var(--muted); }
       .group { margin: 10px 0 14px; padding: 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.02); }
       .group h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .4px; text-transform: uppercase; }
-      .row { display: grid; grid-template-columns: 1fr 110px; grid-gap: 10px; align-items: center; margin: 8px 0; }
+      .row { display: grid; grid-template-columns: 1fr 150px; grid-gap: 10px; align-items: center; margin: 8px 0; }
       .row label { display: block; font-size: 13px; }
       .row .value { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
       .row-2col { display: grid; grid-template-columns: 1fr 1fr; grid-gap: 10px; }
@@ -43,11 +43,12 @@
       input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: linear-gradient(90deg, rgba(255,255,255,.2), rgba(255,255,255,.08)); border-radius: 999px; }
       input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -4px; background: var(--fg); border-radius: 50%; border: 0; box-shadow: 0 0 0 2px #000 inset; }
       input[type="checkbox"] { transform: translateY(2px); accent-color: var(--accent); }
+      select { width: 100%; padding: 6px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.15); color: var(--fg); border-radius: 6px; }
       .btns { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
       button { padding: 8px 10px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.06); color: var(--fg); font-weight: 600; border-radius: 6px; cursor: pointer; }
       button:hover { background: rgba(255,255,255,.12); }
       .hint { position: fixed; left: 12px; bottom: 12px; color: var(--muted); background: rgba(0,0,0,.35); padding: 6px 8px; border-radius: 6px; }
-      @media (max-width: 860px) { .panel { width: 82vw; } }
+      @media (max-width: 900px) { .panel { width: 86vw; } }
     </style>
   </head>
   <body>
@@ -55,6 +56,20 @@
 
     <aside class="panel" aria-label="Controls">
       <h1>Prism Fold <small>• cohesive convex hull</small></h1>
+
+      <div class="group">
+        <h2>View</h2>
+        <div class="row">
+          <label>Mode</label>
+          <div class="value">
+            <select id="viewMode">
+              <option value="wireframe">Wireframe</option>
+              <option value="shaded">Shaded</option>
+              <option value="textured" selected>Textured</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
       <div class="group">
         <h2>Structure (Hull)</h2>
@@ -66,7 +81,7 @@
         <div class="row"><label>Point speed</label><div class="value"><span id="ptSpeedVal">0.25</span></div></div>
         <input id="ptSpeed" type="range" min="0" max="2" step="0.01" value="0.25" />
         <div class="row"><label>Edge opacity</label><div class="value"><span id="edgeOpacityVal">0.12</span></div></div>
-        <input id="edgeOpacity" type="range" min="0" max="0.6" step="0.01" value="0.12" />
+        <input id="edgeOpacity" type="range" min="0" max="0.9" step="0.01" value="0.12" />
         <div class="btns">
           <button id="reseed">Reseed</button>
           <button id="regularize">Regularize</button>
@@ -124,9 +139,9 @@
       </div>
     </aside>
 
-    <div class="hint">Drag to orbit • Hull = convex of moving points • Subtle ghosting • Flat‑shaded facets</div>
+    <div class="hint">Drag to orbit • View: Wireframe / Shaded / Textured • Facets are flat‑shaded</div>
 
-    <!-- Import map + polyfill so bare 'three' & add-ons resolve in the browser -->
+    <!-- Import map + polyfill so 'three' & add-ons resolve in the browser -->
     <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.min.js"></script>
     <script type="importmap">
       {
