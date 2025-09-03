@@ -1,5 +1,6 @@
-// Convex hull (straight edges) + cohesive folding + thin‑film + subtle ghosting.
-// Fixes QuickHull error by populating valid points BEFORE building hull.
+// Convex hull (straight edges) + cohesive folding + improved textures + view dropdown.
+// WebGL1-friendly ShaderMaterial (derivatives enabled for flat facets).
+// NOTE: this keeps the *shape and point controls* identical; we only add "View" and texture polish.
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -40,6 +41,8 @@ controls.dampingFactor = 0.08;
 // -----------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const state = {
+  // view
+  viewMode: 'textured', // 'wireframe' | 'shaded' | 'textured'
   // hull
   ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12,
   // fold
@@ -48,27 +51,32 @@ const state = {
   patMix: 0.55, noiseScale: 2.0, thick: 430, ior: 1.38, bandFreq: 12.0, bandSpeed: 1.10,
   // fx
   after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18,
+  // motion
   autoSpin: true, spinSpeed: 0.002
 };
+
 function setVal(id, v, d = 2){ $(id).textContent = (typeof v === 'number') ? v.toFixed(d) : String(v); }
 function syncUI(){
+  // view
+  $('viewMode').value = state.viewMode;
+  // hull
   $('ptCount').value = state.ptCount; setVal('ptCountVal', state.ptCount, 0);
   $('spike').value   = state.spike;   setVal('spikeVal', state.spike, 2);
   $('animatePts').checked = state.animatePts;
   $('ptSpeed').value = state.ptSpeed; setVal('ptSpeedVal', state.ptSpeed, 2);
   $('edgeOpacity').value = state.edgeOpacity; setVal('edgeOpacityVal', state.edgeOpacity, 2);
-
+  // fold
   $('foldStr').value = state.foldStr; setVal('foldStrVal', state.foldStr);
   $('foldSoft').value = state.foldSoft; setVal('foldSoftVal', state.foldSoft, 2);
   $('planeCount').value = state.planeCount; setVal('planeCountVal', state.planeCount, 0);
-
+  // material
   $('patMix').value = state.patMix; setVal('patMixVal', state.patMix, 2);
   $('noiseScale').value = state.noiseScale; setVal('noiseScaleVal', state.noiseScale, 2);
   $('thick').value = state.thick; setVal('thickVal', state.thick, 0);
   $('ior').value = state.ior; setVal('iorVal', state.ior, 3);
   $('bandFreq').value = state.bandFreq; setVal('bandFreqVal', state.bandFreq, 1);
   $('bandSpeed').value = state.bandSpeed; setVal('bandSpeedVal', state.bandSpeed, 2);
-
+  // fx
   $('after').value = state.after; setVal('afterVal', state.after, 4);
   $('rgb').value = state.rgb; setVal('rgbVal', state.rgb, 4);
   $('bloomStr').value = state.bloomStr; setVal('bloomStrVal', state.bloomStr, 2);
@@ -84,12 +92,10 @@ const MAX_POINTS = 40;
 const seeds = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
 const base  = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
 
-// initialize base points (non-degenerate)
 function reseed(mode = 'random') {
   const R = 1.0;
   for (let i = 0; i < MAX_POINTS; i++) {
     if (mode === 'regularize') {
-      // points roughly on a ring (then animated)
       const a = (i / MAX_POINTS) * Math.PI * 2;
       base[i].set(Math.cos(a), 0, Math.sin(a)).multiplyScalar(R);
     } else {
@@ -98,7 +104,7 @@ function reseed(mode = 'random') {
       const th = 2 * Math.PI * u, ph = Math.acos(2 * v - 1);
       base[i].set(
         Math.sin(ph) * Math.cos(th),
-        Math.cos(ph) * 0.6,                     // squash Y a bit
+        Math.cos(ph) * 0.6,
         Math.sin(ph) * Math.sin(th)
       ).normalize().multiplyScalar(R);
     }
@@ -110,21 +116,19 @@ function updatePoints(t) {
   const n = Math.max(4, Math.min(state.ptCount, MAX_POINTS));
   const amp = state.spike;
   const speed = state.animatePts ? state.ptSpeed : 0.0;
-
   for (let i = 0; i < n; i++) {
     const off = i * 0.37;
     const b = base[i];
     const radial = 1.0 + amp * Math.sin(t * (0.7 + 0.23 * Math.sin(off)) + off * 1.618);
     const y = 0.3 * Math.sin(t * speed + off);
     seeds[i].set(b.x * radial, b.y + y, b.z * radial);
-    // add tiny jitter so no two points are exactly equal (avoids hull degeneracy)
+    // tiny jitter avoids degeneracy
     seeds[i].x += 1e-4 * Math.sin(999.1 * (i + 0.123));
     seeds[i].y += 1e-4 * Math.sin(777.7 * (i + 0.456));
     seeds[i].z += 1e-4 * Math.sin(555.5 * (i + 0.789));
   }
 }
 
-// produce a clean array of points for ConvexGeometry
 function gatherHullPoints() {
   const n = Math.max(4, Math.min(state.ptCount, MAX_POINTS));
   const uniq = new Map();
@@ -139,19 +143,14 @@ function gatherHullPoints() {
 }
 
 let mesh, edgeLines;
-
-// (Re)build the hull; guard against invalid/degenerate point sets
 function rebuildHull() {
   const pts = gatherHullPoints();
-  if (pts.length < 4) return; // not enough distinct points yet
+  if (pts.length < 4) return;
 
-  // dispose previous
   if (mesh) { mesh.geometry.dispose(); scene.remove(mesh); }
   if (edgeLines) { edgeLines.geometry.dispose(); scene.remove(edgeLines); }
 
-  // Convex hull via QuickHull (examples addon)  :contentReference[oaicite:4]{index=4}
-  const geom = new ConvexGeometry(pts);
-
+  const geom = new ConvexGeometry(pts); // QuickHull under the hood
   mesh = new THREE.Mesh(geom, material);
   scene.add(mesh);
 
@@ -159,6 +158,8 @@ function rebuildHull() {
   const eMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: state.edgeOpacity });
   edgeLines = new THREE.LineSegments(eGeo, eMat);
   scene.add(edgeLines);
+
+  applyViewMode(); // ensure visibility/opacity matches current mode
 }
 
 // -----------------------------------------------------------------------------
@@ -178,12 +179,21 @@ function buildPlanes(count = 7) {
   while (arr.length < count) arr.push(new THREE.Vector3(0, 1, 0));
   return arr.slice(0, Math.min(count, MAX_PLANES));
 }
+function loadPlanes(count) {
+  const arr = buildPlanes(count);
+  uniforms.uPlaneCount.value = count | 0;
+  for (let i = 0; i < MAX_PLANES; i++) {
+    uniforms.uPlanes.value[i].copy(arr[i % arr.length]);
+  }
+}
 
 // -----------------------------------------------------------------------------
 // Shader (GLSL1, flat-shaded facets via derivatives)
 // -----------------------------------------------------------------------------
 const uniforms = {
   uTime:           { value: 0 },
+  // view
+  uTexEnabled:     { value: 1.0 },  // 0 = shaded, 1 = textured
   // folding
   uFoldStrength:   { value: state.foldStr },
   uFoldSoft:       { value: state.foldSoft },
@@ -258,12 +268,14 @@ void main(){
 }
 `;
 
-// Fragment shader: thin-film + hybrid pattern + flat facets (derivatives)
+// Fragment shader: thin-film + hybrid pattern + anisotropic glints + flat facets.
+// Adds uTexEnabled: 0=shaded (base only), 1=textured (full).
 const fragmentShader = `
 #extension GL_OES_standard_derivatives : enable
 precision highp float;
 
 uniform float uTime;
+uniform float uTexEnabled;
 uniform float uPatMix;
 uniform float uNoiseScale;
 uniform float uStripeFreq;
@@ -291,7 +303,8 @@ float noise3(vec3 x){
   float xy2 = mix(mix(e,f1,u.x), mix(g,h,u.x), u.y);
   return mix(xy1, xy2, u.z);
 }
-float fbm(vec3 p){ float s = 0.0, a = 0.5; for(int i=0;i<5;i++){ s += a * noise3(p); p *= 2.02; a *= 0.5; } return s; }
+float fbm(vec3 p){ float s=0.0, a=0.5; for(int i=0;i<5;i++){ s += a * noise3(p); p *= 2.02; a *= 0.5; } return s; }
+float tri(float x){ return abs(fract(x) - 0.5) * 2.0; } // triangular wave (holographic grating feel)
 
 // thin-film interference (approx RGB wavelengths)
 vec3 thinFilmIridescence(float thickness, float n1, float n2, float n3, float cosTheta1){
@@ -312,28 +325,40 @@ void main(){
   vec3 V = normalize(-vPosView);
   float NdotV = clamp(dot(N, V), 0.0, 1.0);
 
-  // hybrid pattern (bands + fbm) → nontrivial reflections
+  // Base lambert + rim (used in both shaded/textured)
+  vec3 L = normalize(vec3(0.35, 0.9, 0.15));
+  float diff = max(dot(N, L), 0.0);
+  float rim  = pow(1.0 - NdotV, 2.0);
+  vec3 baseCol = uBaseColor * diff + uBaseColor * rim * 0.15;
+
+  if (uTexEnabled < 0.5) {
+    // SHaded mode: no film/textures, keep crease hint subtle.
+    vec3 color = baseCol + vCrease * 0.15;
+    gl_FragColor = vec4(color, 1.0);
+    return;
+  }
+
+  // Hybrid pattern (bands + FBM + subpixel "grating" flavor)
   vec3 dir = normalize(vec3(0.7, 0.0, 0.3));
   float coord = dot(vPosWorld, dir) * uStripeFreq + uTime * uStripeMove;
   float stripes = smoothstep(0.72, 0.985, 0.5 + 0.5*sin(coord));
+  float grating = tri(coord * 0.5);                      // slower triangular wave
   float n = fbm(vPosWorld * uNoiseScale + vec3(0.0, uTime*0.15, 0.0));
-  float pat = mix(stripes, n, uPatMix);
+  float pat = mix(mix(stripes, grating, 0.35), n, uPatMix);
 
+  // Film thickness varies with pattern → oily, weird reflections
   float thickness = uThicknessBase * (0.70 + 0.30 * pat);
   vec3 film = thinFilmIridescence(thickness, 1.0, uIorFilm, 1.0, NdotV);
 
-  vec3 L = normalize(vec3(0.35, 0.9, 0.15));
-  float diff = max(dot(N, L), 0.0);
+  // Fresnel + anisotropic glints
   float f0 = 0.06;
   float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
-
-  // anisotropic glints
   vec3 R = reflect(-V, N);
   vec3 A1 = normalize(vec3(0.2, 1.0, 0.0));
   vec3 A2 = normalize(vec3(-0.7, 0.3, 0.6));
   float aniso = pow(abs(dot(R, A1)), 24.0) + 0.5 * pow(abs(dot(R, A2)), 36.0);
 
-  vec3 color = uBaseColor * diff;
+  vec3 color = baseCol;
   color = mix(color, film, 0.75);
   color += film * pat * 1.2;
   color += fresnel * film;
@@ -346,7 +371,7 @@ void main(){
 
 const material = new THREE.ShaderMaterial({
   uniforms, vertexShader, fragmentShader, side: THREE.DoubleSide, transparent: false,
-  extensions: { derivatives: true } // enable dFdx/dFdy for flat facets  :contentReference[oaicite:5]{index=5}
+  extensions: { derivatives: true } // enable dFdx/dFdy for flat facets
 });
 
 // -----------------------------------------------------------------------------
@@ -358,7 +383,7 @@ composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), state.bloomStr, state.bloomRad, state.bloomThr);
 composer.addPass(bloomPass);
 
-const afterPass = new AfterimagePass(); // has uniforms.damp  :contentReference[oaicite:6]{index=6}
+const afterPass = new AfterimagePass(); // exposes uniforms.damp
 composer.addPass(afterPass);
 
 const rgbShiftPass = new ShaderPass(RGBShiftShader);
@@ -371,6 +396,32 @@ composer.addPass(new OutputPass());
 // -----------------------------------------------------------------------------
 // Plane uniforms & initial points → build FIRST, then render
 // -----------------------------------------------------------------------------
+function applyViewMode(){
+  // mesh/edges toggles for View dropdown
+  if (!mesh || !edgeLines) return;
+  switch (state.viewMode) {
+    case 'wireframe':
+      uniforms.uTexEnabled.value = 0.0; // irrelevant since mesh hidden
+      mesh.visible = false;
+      edgeLines.visible = true;
+      edgeLines.material.opacity = Math.max(0.5, state.edgeOpacity);
+      break;
+    case 'shaded':
+      uniforms.uTexEnabled.value = 0.0;
+      mesh.visible = true;
+      edgeLines.visible = true;
+      edgeLines.material.opacity = state.edgeOpacity;
+      break;
+    default:
+    case 'textured':
+      uniforms.uTexEnabled.value = 1.0;
+      mesh.visible = true;
+      edgeLines.visible = true;
+      edgeLines.material.opacity = state.edgeOpacity;
+      break;
+  }
+}
+
 function loadPlanes(count) {
   const arr = buildPlanes(count);
   uniforms.uPlaneCount.value = count | 0;
@@ -382,19 +433,21 @@ loadPlanes(state.planeCount);
 
 // **Important**: populate seeds BEFORE first hull
 updatePoints(0);
-rebuildHull(); // safe: we now have ≥4 distinct, finite points
-
-// add mesh after material is ready
-// (mesh created inside rebuildHull)
+rebuildHull(); // safe
 
 // -----------------------------------------------------------------------------
 // UI events
 // -----------------------------------------------------------------------------
+$('viewMode').addEventListener('change', () => { state.viewMode = $('viewMode').value; applyViewMode(); });
+
 $('ptCount').addEventListener('input', () => { state.ptCount = parseInt($('ptCount').value,10); setVal('ptCountVal', state.ptCount, 0); });
 $('spike').addEventListener('input', () => { state.spike = parseFloat($('spike').value); setVal('spikeVal', state.spike, 2); });
 $('animatePts').addEventListener('change', () => { state.animatePts = $('animatePts').checked; });
 $('ptSpeed').addEventListener('input', () => { state.ptSpeed = parseFloat($('ptSpeed').value); setVal('ptSpeedVal', state.ptSpeed, 2); });
-$('edgeOpacity').addEventListener('input', () => { state.edgeOpacity = parseFloat($('edgeOpacity').value); setVal('edgeOpacityVal', state.edgeOpacity, 2); if (edgeLines) edgeLines.material.opacity = state.edgeOpacity; });
+$('edgeOpacity').addEventListener('input', () => {
+  state.edgeOpacity = parseFloat($('edgeOpacity').value); setVal('edgeOpacityVal', state.edgeOpacity, 2);
+  if (edgeLines) edgeLines.material.opacity = state.edgeOpacity;
+});
 
 $('reseed').addEventListener('click', () => { reseed('random'); updatePoints(uniforms.uTime.value); rebuildHull(); });
 $('regularize').addEventListener('click', () => { reseed('regularize'); updatePoints(uniforms.uTime.value); rebuildHull(); });
@@ -416,8 +469,32 @@ $('bloomStr').addEventListener('input', () => { state.bloomStr = parseFloat($('b
 $('bloomRad').addEventListener('input', () => { state.bloomRad = parseFloat($('bloomRad').value); setVal('bloomRadVal', state.bloomRad, 2); bloomPass.radius = state.bloomRad; });
 $('bloomThr').addEventListener('input', () => { state.bloomThr = parseFloat($('bloomThr').value); setVal('bloomThrVal', state.bloomThr, 2); bloomPass.threshold = state.bloomThr; });
 
+$('reset').addEventListener('click', () => {
+  Object.assign(state, {
+    viewMode: 'textured',
+    ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12,
+    foldStr: 1.0, foldSoft: 0.16, planeCount: 7,
+    patMix: 0.55, noiseScale: 2.0, thick: 430, ior: 1.38, bandFreq: 12.0, bandSpeed: 1.10,
+    after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18,
+    autoSpin: true, spinSpeed: 0.002
+  });
+  syncUI(); loadPlanes(state.planeCount); applyViewMode();
+});
+
+$('toggleBloom').addEventListener('click', () => { bloomPass.enabled = !bloomPass.enabled; });
+
+// Pointer gently modulates fold strength (kept subtle)
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!state.animatePts) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width;
+  uniforms.uFoldStrength.value = lerp(0.6, 1.3, clamp(x, 0, 1));
+  $('foldStr').value = uniforms.uFoldStrength.value;
+  setVal('foldStrVal', uniforms.uFoldStrength.value);
+});
+
 // -----------------------------------------------------------------------------
-// Resize & Animate (rebuild hull at modest cadence to avoid hitches)
+// Resize & Animate (throttled hull rebuild)
 // -----------------------------------------------------------------------------
 function onResize(){
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -434,18 +511,17 @@ function animate(){
   const dt = clock.getDelta();
   const t  = (uniforms.uTime.value += dt);
 
-  // Framerate‑aware ghosting (consistent trail length across refresh rates) :contentReference[oaicite:7]{index=7}
+  // Framerate‑aware ghosting: consistent trail length across refresh rates
   afterPass.uniforms['damp'].value = Math.pow(state.after, dt * 60.0);
 
   // Update points then (throttled) hull rebuild
   updatePoints(t);
   rebuildAccumulator += dt;
-  if (rebuildAccumulator > 0.05) { // ~20 Hz rebuilds
+  if (rebuildAccumulator > 0.05) { // ~20 Hz
     rebuildHull();
     rebuildAccumulator = 0;
   }
 
-  // Spin + render
   if (state.autoSpin && mesh) mesh.rotation.y += state.spinSpeed;
   controls.update();
   composer.render();
