@@ -1,5 +1,4 @@
-// Prism Fold — Three.js (WebGL1-compatible shaders)
-// Faceted geometry "folding in on itself" with thin‑film iridescence and post‑FX.
+// Prism Fold — Three.js (GLSL1 shaders; ShaderMaterial without redeclaring built-ins)
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -10,8 +9,11 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 
-// --- renderer --------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Renderer
+// -----------------------------------------------------------------------------
 const container = document.getElementById('app');
+
 const renderer = new THREE.WebGLRenderer({
   antialias: false,
   powerPreference: 'high-performance'
@@ -21,21 +23,23 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.2;
-renderer.debug.checkShaderErrors = true; // helpful if something goes wrong
+renderer.debug.checkShaderErrors = true; // show shader errors clearly in console
 container.appendChild(renderer.domElement);
 
-// --- scene & camera --------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Scene & Camera
+// -----------------------------------------------------------------------------
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(
-  45, window.innerWidth / window.innerHeight, 0.1, 100
-);
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.set(0, 0, 5);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
-// --- geometry + shaders ----------------------------------------------------
+// -----------------------------------------------------------------------------
+// Geometry + Shader material
+// -----------------------------------------------------------------------------
 const geo = new THREE.IcosahedronGeometry(1.0, 1);
 
 const uniforms = {
@@ -43,25 +47,19 @@ const uniforms = {
   uFold:           { value: 0.8 },
   uStripeFreq:     { value: 11.0 },
   uStripeMove:     { value: 1.25 },
-  uThicknessBase:  { value: 420.0 },  // nm
+  uThicknessBase:  { value: 420.0 },  // nanometers
   uIorFilm:        { value: 1.38 },
   uBaseColor:      { value: new THREE.Color(0x0a0f08) }
 };
 
-// GLSL 1.00 versions (no "#version 300 es") for WebGL1 compatibility.
+// NOTE: With ShaderMaterial, Three.js injects built-in attributes/uniforms
+// (position, normal, modelViewMatrix, projectionMatrix, modelMatrix, normalMatrix, ...).
+// Do NOT redeclare them here — just use them. :contentReference[oaicite:1]{index=1}
 const vertexShader = `
 precision highp float;
 
 uniform float uTime;
 uniform float uFold;
-
-attribute vec3 position;
-attribute vec3 normal;
-
-uniform mat4 modelMatrix;
-uniform mat4 modelViewMatrix;
-uniform mat4 projectionMatrix;
-uniform mat3 normalMatrix;
 
 varying vec3 vNormal;
 varying vec3 vPosView;
@@ -80,7 +78,8 @@ mat3 rotY(float a){
 }
 
 void main(){
-  vec3 p = position;
+  // 'position' and 'normal' are provided by Three.js (no need to declare)
+  vec3 p   = position;
   vec3 nrm = normal;
 
   // subtle rotation for life
@@ -168,7 +167,6 @@ const material = new THREE.ShaderMaterial({
   uniforms,
   vertexShader,
   fragmentShader,
-  // GLSL1 by default; no glslVersion set → works on WebGL1 renderers
   side: THREE.DoubleSide,
   transparent: false
 });
@@ -176,7 +174,9 @@ const material = new THREE.ShaderMaterial({
 const mesh = new THREE.Mesh(geo, material);
 scene.add(mesh);
 
-// --- post-processing -------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Post‑processing (RenderPass → Bloom → RGBShift → OutputPass)
+// -----------------------------------------------------------------------------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 
@@ -188,14 +188,16 @@ const bloomPass = new UnrealBloomPass(
 );
 composer.addPass(bloomPass);
 
-const rgbShift = new ShaderPass(RGBShiftShader);
-rgbShift.uniforms.amount.value = 0.0015;
-rgbShift.uniforms.angle.value  = Math.PI / 4;
-composer.addPass(rgbShift);
+const rgbShiftPass = new ShaderPass(RGBShiftShader);
+rgbShiftPass.uniforms['amount'].value = 0.0015;
+rgbShiftPass.uniforms['angle'].value  = Math.PI / 4;
+composer.addPass(rgbShiftPass);
 
-composer.addPass(new OutputPass()); // ensures tone mapping & output color space
+composer.addPass(new OutputPass()); // respect tone mapping + output color space
 
-// --- UI wiring -------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// UI wiring
+// -----------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const ui = {
   followMouse: $('followMouse'),
@@ -260,7 +262,7 @@ function applyStateToScene() {
   bloomPass.radius    = state.bloomRadius;
   bloomPass.threshold = state.bloomThreshold;
 
-  rgbShift.uniforms.amount.value = state.rgbAmount;
+  rgbShiftPass.uniforms['amount'].value = state.rgbAmount;
 }
 syncUI(); applyStateToScene();
 
@@ -290,6 +292,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   ui.fold.value = state.fold; ui.foldVal.textContent = state.fold.toFixed(2);
   applyStateToScene();
 });
+
 // wheel on canvas adjusts stripes
 renderer.domElement.addEventListener('wheel', (e) => {
   const delta = e.deltaY > 0 ? -0.5 : 0.5;
@@ -298,7 +301,9 @@ renderer.domElement.addEventListener('wheel', (e) => {
   applyStateToScene();
 }, { passive: true });
 
-// --- resize & animate -------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Resize & animate
+// -----------------------------------------------------------------------------
 function onResize(){
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
