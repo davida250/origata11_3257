@@ -127,6 +127,22 @@
       </div>
 
       <div class="group">
+        <h2>Advanced (film & micro-structure)</h2>
+        <div class="row"><label>Pattern mix</label><div class="value"><span id="patMixVal">0.65</span></div></div>
+        <input id="patMix" type="range" min="0" max="1" step="0.01" value="0.65" />
+        <div class="row"><label>Noise scale</label><div class="value"><span id="noiseScaleVal">2.2</span></div></div>
+        <input id="noiseScale" type="range" min="0.5" max="6" step="0.01" value="2.2" />
+        <div class="row"><label>Band freq</label><div class="value"><span id="bandFreqVal">10.0</span></div></div>
+        <input id="bandFreq" type="range" min="2" max="28" step="0.1" value="10.0" />
+        <div class="row"><label>Band speed</label><div class="value"><span id="bandSpeedVal">0.9</span></div></div>
+        <input id="bandSpeed" type="range" min="0" max="4" step="0.01" value="0.9" />
+        <div class="row"><label>Film thickness (nm)</label><div class="value"><span id="thickVal">420</span></div></div>
+        <input id="thick" type="range" min="250" max="650" step="1" value="420" />
+        <div class="row"><label>Film IOR</label><div class="value"><span id="iorVal">1.37</span></div></div>
+        <input id="ior" type="range" min="1.25" max="1.55" step="0.001" value="1.37" />
+      </div>
+
+      <div class="group">
         <h2>FX</h2>
         <div class="row"><label>Ghost (0–0.9999)</label><div class="value"><span id="afterVal">0.9600</span></div></div>
         <input id="after" type="range" min="0" max="0.9999" step="0.0001" value="0.96" />
@@ -164,6 +180,7 @@
       }
     </script>
 
+    <!-- Load after the UI so all elements exist when main.js runs -->
     <script type="module" src="./main.js"></script>
   </body>
 </html>
