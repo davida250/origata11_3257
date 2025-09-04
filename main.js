@@ -1,4 +1,5 @@
 // Convex hull + cohesive folding + bold patterns & distortions (no mouse coupling).
+// IDs in this file exactly match index.html to avoid null element issues.
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -46,7 +47,7 @@ const state = {
   texPreset: 'refA',
   pattern: 0,                 // 0 Bands, 1 CrossGrid, 2 Spiral, 3 Kaleido, 4 Cells
   patScale: 12.0, warp: 0.80, warpSpd: 1.0, contrast: 1.40, refl: 0.30,
-  patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9, // legacy knobs still useful
+  patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9,
   thick: 420, ior: 1.37,
   texStr: 0.85, desat: 0.75, glint: 0.45,
   // fx
@@ -56,21 +57,22 @@ const state = {
 };
 function setVal(id, v, d = 2){ const el = document.getElementById(id); if (el) el.textContent = (typeof v === 'number') ? v.toFixed(d) : String(v); }
 function syncUI(){
+  // View
   $('viewMode').value = state.viewMode;
   $('edgesOverlay').checked = state.edgesOverlay;
-
+  // Structure
   $('ptCount').value = state.ptCount; setVal('ptCountVal', state.ptCount, 0);
   $('spike').value = state.spike; setVal('spikeVal', state.spike, 2);
   $('animatePts').checked = state.animatePts;
   $('ptSpeed').value = state.ptSpeed; setVal('ptSpeedVal', state.ptSpeed, 2);
   $('edgeOpacity').value = state.edgeOpacity; setVal('edgeOpacityVal', state.edgeOpacity, 2);
   $('smooth').value = state.smooth; setVal('smoothVal', state.smooth, 2);
-
+  // Fold
   $('foldStr').value = state.foldStr; setVal('foldStrVal', state.foldStr);
   $('foldSoft').value = state.foldSoft; setVal('foldSoftVal', state.foldSoft, 2);
   $('foldSpd').value = state.foldSpeed; setVal('foldSpdVal', state.foldSpeed, 2);
   $('planeCount').value = state.planeCount; setVal('planeCountVal', state.planeCount, 0);
-
+  // Patterns
   $('texPreset').value = state.texPreset;
   $('pattern').value = String(state.pattern);
   $('patScale').value = state.patScale; setVal('patScaleVal', state.patScale, 1);
@@ -78,17 +80,17 @@ function syncUI(){
   $('warpSpd').value = state.warpSpd; setVal('warpSpdVal', state.warpSpd, 2);
   $('contrast').value = state.contrast; setVal('contrastVal', state.contrast, 2);
   $('refl').value = state.refl; setVal('reflVal', state.refl, 2);
-
+  $('texStr').value = state.texStr; setVal('texStrVal', state.texStr, 2);
+  $('desat').value = state.desat; setVal('desatVal', state.desat, 2);
+  $('glint').value = state.glint; setVal('glintVal', state.glint, 2);
+  // Advanced (micro / film)
   $('patMix').value = state.patMix; setVal('patMixVal', state.patMix, 2);
   $('noiseScale').value = state.noiseScale; setVal('noiseScaleVal', state.noiseScale, 2);
   $('bandFreq').value = state.bandFreq; setVal('bandFreqVal', state.bandFreq, 1);
   $('bandSpeed').value = state.bandSpeed; setVal('bandSpeedVal', state.bandSpeed, 2);
   $('thick').value = state.thick; setVal('thickVal', state.thick, 0);
   $('ior').value = state.ior; setVal('iorVal', state.ior, 3);
-  $('texStr').value = state.texStr; setVal('texStrVal', state.texStr, 2);
-  $('desat').value = state.desat; setVal('desatVal', state.desat, 2);
-  $('glint').value = state.glint; setVal('glintVal', state.glint, 2);
-
+  // FX
   $('after').value = state.after; setVal('afterVal', state.after, 4);
   $('rgb').value = state.rgb; setVal('rgbVal', state.rgb, 4);
   $('bloomStr').value = state.bloomStr; setVal('bloomStrVal', state.bloomStr, 2);
@@ -118,7 +120,6 @@ function reseed(mode = 'random') {
         Math.sin(ph) * Math.sin(th)
       ).normalize().multiplyScalar(R);
     }
-    // initialize seed and target coherently
     seeds[i].copy(base[i]);
     targets[i].copy(base[i]);
   }
@@ -137,18 +138,13 @@ function updateTargets(t) {
     targets[i].set(b.x * radial, b.y + y, b.z * radial);
   }
 }
-
 function integrateSeeds(alpha) {
   const n = Math.max(4, Math.min(state.ptCount, MAX_POINTS));
-  for (let i = 0; i < n; i++) {
-    seeds[i].lerp(targets[i], clamp(alpha, 0, 1)); // low-pass filter
-  }
+  for (let i = 0; i < n; i++) seeds[i].lerp(targets[i], clamp(alpha, 0, 1));
 }
-
 function gatherHullPoints() {
   const n = Math.max(4, Math.min(state.ptCount, MAX_POINTS));
-  const pts = [];
-  const seen = new Map();
+  const pts = [], seen = new Map();
   for (let i = 0; i < n; i++) {
     const p = seeds[i];
     const k = `${p.x.toFixed(6)},${p.y.toFixed(6)},${p.z.toFixed(6)}`;
@@ -194,9 +190,7 @@ function buildPlanes(count = 7) {
 function loadPlanes(count) {
   const arr = buildPlanes(count);
   uniforms.uPlaneCount.value = count | 0;
-  for (let i = 0; i < MAX_PLANES; i++) {
-    uniforms.uPlanes.value[i].copy(arr[i % arr.length]);
-  }
+  for (let i = 0; i < MAX_PLANES; i++) uniforms.uPlanes.value[i].copy(arr[i % arr.length]);
 }
 
 // ------------------------------------- Shader (flat facets + bold patterns)
@@ -217,7 +211,7 @@ const uniforms = {
   uWarpSpeed:      { value: state.warpSpd },
   uContrast:       { value: state.contrast },
   uReflMix:        { value: state.refl },
-  // legacy/extra
+  // micro / film parameters
   uPatMix:         { value: state.patMix },
   uNoiseScale:     { value: state.noiseScale },
   uStripeFreq:     { value: state.bandFreq },
@@ -254,7 +248,7 @@ mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.,s, 0.,1.,0., -s,0
 
 void main(){
   vec3 p = position, nrm = normal;
-  float a = uTime * 0.20; // slow rigid spin; visual focus on folding speed slider
+  float a = uTime * 0.20; // slow rigid spin; fold speed is separate
   mat3 R = rotY(a);
   p = R*p; nrm = R*nrm;
 
@@ -278,7 +272,7 @@ void main(){
 }
 `;
 
-// NOTE: no #extension directives; derivatives are core in WebGL2/ESSL3 via three.js pipeline.
+// No #extension directives; derivatives are core in WebGL2/ESSL3.
 const fragmentShader = `
 precision highp float;
 
@@ -292,7 +286,6 @@ uniform vec3  uBaseColor;
 varying vec3 vNormal, vPosView, vPosWorld;
 varying float vCrease;
 
-// -------- utilities
 float hash11(float n){ return fract(sin(n)*43758.5453123); }
 float noise3(vec3 x){
   vec3 i=floor(x), f=fract(x);
@@ -309,7 +302,6 @@ float tri(float x){ return abs(fract(x)-0.5)*2.0; }
 float luma(vec3 c){ return dot(c, vec3(0.2126,0.7152,0.0722)); }
 vec3  ortho(vec3 n){ return normalize(abs(n.x)>0.5? vec3(-n.y,n.x,0.): vec3(0.,-n.z,n.y)); }
 
-// cheap Worley-like 2D cells on arbitrary plane
 float cells2(vec2 uv){
   vec2 g = floor(uv), f = fract(uv);
   float dmin = 1e9;
@@ -318,14 +310,13 @@ float cells2(vec2 uv){
       vec2 o = vec2(float(i), float(j));
       float id = dot(g+o, vec2(127.1,311.7));
       vec2 r = vec2(hash11(id), hash11(id+1.23));
-      vec2 p = o + r - f + 0.12 * sin(uTime*0.6 + id); // animated jitter
+      vec2 p = o + r - f + 0.12 * sin(uTime*0.6 + id);
       dmin = min(dmin, dot(p,p));
     }
   }
-  return exp(-3.0 * dmin); // bright cell centers
+  return exp(-3.0 * dmin);
 }
 
-// thin-film interference (approx wavelengths)
 vec3 thinFilm(float thickness, float n1, float n2, float n3, float cosTheta1){
   const float PI = 3.141592653589793;
   vec3 lambda=vec3(680.,550.,440.);
@@ -336,7 +327,6 @@ vec3 thinFilm(float thickness, float n1, float n2, float n3, float cosTheta1){
   return 0.5+0.5*cos(phase);
 }
 
-// simple procedural env from reflection vector
 vec3 envColor(vec3 R){
   float v = clamp(R.y*0.5+0.5, 0.0, 1.0);
   float hStripes = 0.5 + 0.5 * sin((R.x+R.z)*24.0 + uTime*0.6);
@@ -345,14 +335,11 @@ vec3 envColor(vec3 R){
   return sky + 0.25*hStripes*vec3(0.8,0.9,1.0) + 0.2*rings*vec3(1.0,0.85,0.6);
 }
 
-// pattern generator (bold)
 float patternValue(vec3 pos, vec3 N){
-  // build local 2D space on the facet plane
   vec3 T = ortho(N);
   vec3 B = normalize(cross(N, T));
   vec2 uv = vec2(dot(pos, T), dot(pos, B)) * uPatternScale;
 
-  // domain warp
   vec3 pw = pos;
   vec3 q = pos * (0.35 + 0.15*uPatternScale*0.05);
   vec3 warp = vec3(
@@ -366,35 +353,29 @@ float patternValue(vec3 pos, vec3 N){
   float t = uTime;
 
   if (uPatternType == 0) {
-    // Bands
     float s = sin(uv.x + 0.6*sin(uv.y*0.5 + t*0.7));
     return 0.5 + 0.5*s;
   } else if (uPatternType == 1) {
-    // CrossGrid
     float gx = 0.5 + 0.5*sin(uv.x + t*0.9);
     float gy = 0.5 + 0.5*sin(uv.y*1.03 - t*0.8);
     return pow(gx*gy, 0.8);
   } else if (uPatternType == 2) {
-    // Spiral
     float r = length(uv)*0.25;
     float a = atan(uv.y, uv.x);
     return 0.5 + 0.5*sin(10.0*a + 6.0*r - t*1.2);
   } else if (uPatternType == 3) {
-    // Kaleido (6-fold angle folding)
     float a = atan(uv.y, uv.x);
     float k = 3.141592653589793/3.0;
     a = mod(a, k);
     float r = length(uv)*0.22;
     return 0.5 + 0.5*sin(12.0*a + 10.0*r - t*1.0);
   } else {
-    // Cells (Worley-ish)
     float c = cells2(uv*0.15);
     return c;
   }
 }
 
 void main(){
-  // flat facet normal via derivatives
   vec3 Ng = normalize(cross(dFdx(vPosWorld), dFdy(vPosWorld)));
   if(dot(Ng, vNormal) < 0.0) Ng = -Ng;
   vec3 N = Ng;
@@ -402,7 +383,6 @@ void main(){
   vec3 V = normalize(-vPosView);
   float NdotV = clamp(dot(N,V), 0.0, 1.0);
 
-  // base lambert + rim
   vec3 L = normalize(vec3(0.35,0.9,0.15));
   float diff = max(dot(N,L), 0.0);
   float rim  = pow(1.0 - NdotV, 2.0);
@@ -414,10 +394,8 @@ void main(){
     return;
   }
 
-  // bold pattern
   float pat = patternValue(vPosWorld, N);
 
-  // optional extra blend with legacy hybrid (for subtle micro-structure)
   vec3 d1 = normalize(vec3(0.7, 0.0, 0.3));
   float coord = dot(vPosWorld, d1) * uStripeFreq + uTime * uStripeMove;
   float grating = tri((coord) * 0.5);
@@ -425,25 +403,20 @@ void main(){
   float micro = mix(grating, n, uPatMix);
   pat = clamp(mix(pat, (pat*0.7 + micro*0.3), 0.25), 0.0, 1.0);
 
-  // contrast
   pat = clamp(0.5 + (pat - 0.5) * uContrast, 0.0, 1.0);
 
-  // thin-film
   float thickness = uThicknessBase * (0.70 + 0.30 * pat) * (0.92 + 0.08 * vCrease);
   vec3 film = thinFilm(thickness, 1.0, uIorFilm, 1.0, NdotV);
 
-  // reflections (procedural env)
   vec3 R = reflect(-V, N);
   vec3 env = envColor(R);
 
-  // fresnel + anisotropic glints
   float f0 = 0.05 + 0.02 * pat;
   float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
   vec3 A1 = normalize(vec3(0.2, 1.0, 0.0));
   vec3 A2 = normalize(vec3(-0.7, 0.3, 0.6));
   float aniso = pow(abs(dot(R,A1)), 24.0) + 0.5 * pow(abs(dot(R,A2)), 36.0);
 
-  // combine
   vec3 color = baseCol;
   vec3 irid = film * (0.6 + 0.7*pat);
   color = mix(color, irid, uTexStr);
@@ -451,7 +424,6 @@ void main(){
   color += aniso * irid * (0.6 * uGlint);
   color += vCrease * irid * 0.25;
 
-  // desaturate toward luma for the dark look
   float Y = luma(color);
   color = mix(color, vec3(Y), clamp(uDesat, 0.0, 1.0));
 
@@ -484,6 +456,7 @@ function applyViewMode(){
   if (!mesh || !edgeLines) return;
   material.wireframe = false;
   mesh.visible = true;
+
   // edges overlay only if requested (and never in pure wireframe)
   edgeLines.visible = state.edgesOverlay && state.viewMode !== 'wireframe';
   edgeLines.material.opacity = state.edgeOpacity;
@@ -551,7 +524,7 @@ updateTargets(0);
 integrateSeeds(1.0);
 rebuildHull();
 
-// ------------------------------------- UI events
+// ------------------------------------- UI events (all IDs exist in index.html)
 $('viewMode').addEventListener('change', () => { state.viewMode = $('viewMode').value; applyViewMode(); });
 $('edgesOverlay').addEventListener('change', () => { state.edgesOverlay = $('edgesOverlay').checked; applyViewMode(); });
 $('edgeOpacity').addEventListener('input', () => {
@@ -614,7 +587,7 @@ $('reset').addEventListener('click', () => {
 
 $('toggleBloom').addEventListener('click', () => { bloomPass.enabled = !bloomPass.enabled; });
 
-// ------------------------------------- Resize & Animate (more frequent hull rebuild to avoid strobing)
+// ------------------------------------- Resize & Animate (60 Hz hull rebuild for stability)
 function onResize(){
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -635,7 +608,7 @@ function animate(){
   integrateSeeds(state.smooth); // smoothing reduces jitter
 
   rebuildAccumulator += dt;
-  if (rebuildAccumulator > 0.016) { // ~60 Hz rebuild for stable motion
+  if (rebuildAccumulator > 0.016) { // ~60 Hz
     rebuildHull();
     rebuildAccumulator = 0;
   }
