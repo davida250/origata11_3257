@@ -1,5 +1,6 @@
 // Convex hull (straight edges) + cohesive folding + iridescent textures + presets.
-// Fix: removed inline #extension; derivatives are enabled via ShaderMaterial.extensions.
+// IMPORTANT: No #extension directives, and we do NOT set material.extensions.derivatives.
+// WebGL2/ESSL3 supports dFdx/dFdy natively; this avoids the compile error you saw.
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -44,10 +45,10 @@ const state = {
   // fold
   foldStr: 1.0, foldSoft: 0.16, planeCount: 7,
   // material / texture
-  texPreset: 'custom',
-  patMix: 0.55, noiseScale: 2.0, bandFreq: 12.0, bandSpeed: 1.10,
-  thick: 430, ior: 1.38,
-  texStr: 0.85, desat: 0.70, glint: 0.40,
+  texPreset: 'refA',
+  patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9,
+  thick: 420, ior: 1.37,
+  texStr: 0.85, desat: 0.75, glint: 0.45,
   // fx
   after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18,
   // motion
@@ -256,7 +257,7 @@ void main(){
 }
 `;
 
-// NOTE: no #extension directive here; derivatives are enabled on the material.
+// NOTE: no #extension directives here. Derivatives are core in WebGL2/ESSL3.
 const fragmentShader = `
 precision highp float;
 
@@ -315,27 +316,23 @@ void main(){
     return;
   }
 
-  // --- hybrid procedural "texture" to match refs (dark, low-sat iridescence)
-  // Axes for bands (two crossed directions -> moiré-like)
+  // --- hybrid procedural "texture" tuned toward your refs
   vec3 d1 = normalize(vec3(0.7, 0.0, 0.3));
   vec3 d2 = normalize(vec3(-0.3, 0.0, 0.9));
 
   float c1 = dot(vPosWorld, d1) * uStripeFreq + uTime * uStripeMove;
   float c2 = dot(vPosWorld, d2) * (uStripeFreq*0.8) - uTime * (uStripeMove*0.6);
 
-  // moiré-ish crossing bands + triangular grating + fbm, blended by uPatMix
-  float bands  = 0.5 + 0.5*sin(c1) ;
+  float bands  = 0.5 + 0.5*sin(c1);
   float bands2 = 0.5 + 0.5*sin(c2*1.07);
   float cross  = smoothstep(0.72, 0.985, bands) * smoothstep(0.72,0.985,bands2);
   float grating = tri((c1 + c2*0.5) * 0.5);
   float n = fbm(vPosWorld * uNoiseScale + vec3(0.0, uTime*0.12, 0.0));
   float pat = mix(mix(cross, grating, 0.35), n, uPatMix);
 
-  // thickness varies with pattern & crease → "weird" reflections in facets
   float thickness = uThicknessBase * (0.70 + 0.30 * pat) * (0.92 + 0.08 * vCrease);
   vec3 film = thinFilm(thickness, 1.0, uIorFilm, 1.0, NdotV);
 
-  // Fresnel + anisotropic glints based on reflection vector
   float f0 = 0.04 + 0.02 * pat;
   float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
   vec3 R = reflect(-V, N);
@@ -343,7 +340,6 @@ void main(){
   vec3 A2 = normalize(vec3(-0.7, 0.3, 0.6));
   float aniso = pow(abs(dot(R,A1)), 24.0) + 0.5 * pow(abs(dot(R,A2)), 36.0);
 
-  // Combine (keep overall dark, low saturation by desaturation + limited strength)
   vec3 irid = film * (0.6 + 0.7*pat);
   vec3 color = baseCol;
   color = mix(color, irid, uTexStr);
@@ -351,7 +347,6 @@ void main(){
   color += aniso * irid * (0.6 * uGlint);
   color += vCrease * irid * 0.28;
 
-  // Desaturate toward luma
   float Y = luma(color);
   color = mix(color, vec3(Y), clamp(uDesat, 0.0, 1.0));
 
@@ -360,9 +355,10 @@ void main(){
 `;
 
 const material = new THREE.ShaderMaterial({
-  uniforms, vertexShader, fragmentShader, side: THREE.DoubleSide,
+  uniforms, vertexShader, fragmentShader,
+  side: THREE.DoubleSide,
   transparent: false,
-  extensions: { derivatives: true }, // enable dFdx/dFdy in WebGL1; no-op on WebGL2
+  // NOTE: do NOT set extensions.derivatives here; it triggers the ESSL3 error.
   wireframe: false
 });
 
@@ -420,12 +416,12 @@ function applyMaterialState(){
 
 function applyPreset(name){
   state.texPreset = name;
-  if (name === 'refA'){           // dark iridescent
+  if (name === 'refA'){           // dark iridescent (closer to uploaded refs)
     Object.assign(state, {
       patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9,
       thick: 420, ior: 1.37, texStr: 0.85, desat: 0.75, glint: 0.45
     });
-  } else if (name === 'refB'){    // ghost grid (crisper bands)
+  } else if (name === 'refB'){    // ghost grid (crisper crossing bands)
     Object.assign(state, {
       patMix: 0.35, noiseScale: 1.3, bandFreq: 18.0, bandSpeed: 1.2,
       thick: 400, ior: 1.36, texStr: 0.80, desat: 0.70, glint: 0.35
@@ -436,12 +432,12 @@ function applyPreset(name){
       thick: 520, ior: 1.40, texStr: 0.75, desat: 0.60, glint: 0.30
     });
   }
-  // 'custom' leaves state unchanged
   syncUI(); applyMaterialState();
 }
 
 // ------------------------------------- initial setup
 loadPlanes(state.planeCount);
+applyMaterialState(); // sync uniforms with initial state
 updatePoints(0);
 rebuildHull();
 
@@ -487,9 +483,9 @@ $('reset').addEventListener('click', () => {
     viewMode: 'textured', edgesOverlay: false,
     ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12,
     foldStr: 1.0, foldSoft: 0.16, planeCount: 7,
-    texPreset: 'custom',
-    patMix: 0.55, noiseScale: 2.0, bandFreq: 12.0, bandSpeed: 1.10,
-    thick: 430, ior: 1.38, texStr: 0.85, desat: 0.70, glint: 0.40,
+    texPreset: 'refA',
+    patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9,
+    thick: 420, ior: 1.37, texStr: 0.85, desat: 0.75, glint: 0.45,
     after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18,
     autoSpin: true, spinSpeed: 0.002
   });
