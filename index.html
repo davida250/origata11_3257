@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Prism Fold — Convex Hull, Cohesive Fold</title>
     <style>
-      :root { --panel-w: 380px; --bg:#000; --fg:#e8e8e8; --muted:#a0a0a0; --accent:#59ffa7; }
+      :root { --panel-w: 400px; --bg:#000; --fg:#e8e8e8; --muted:#a0a0a0; --accent:#59ffa7; }
       html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);
         font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
       #app{position:fixed;inset:0}
@@ -17,7 +17,7 @@
       .panel small{color:var(--muted)}
       .group{margin:10px 0 14px;padding:10px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.02)}
       .group h2{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px;text-transform:uppercase}
-      .row{display:grid;grid-template-columns:1fr 160px;grid-gap:10px;align-items:center;margin:8px 0}
+      .row{display:grid;grid-template-columns:1fr 180px;grid-gap:10px;align-items:center;margin:8px 0}
       .row label{display:block;font-size:13px}
       .row .value{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
       .row-2col{display:grid;grid-template-columns:1fr 1fr;grid-gap:10px}
@@ -65,6 +65,8 @@
         <div class="row"><label>Animate points</label><div class="value"><input id="animatePts" type="checkbox" checked /></div></div>
         <div class="row"><label>Point speed</label><div class="value"><span id="ptSpeedVal">0.25</span></div></div>
         <input id="ptSpeed" type="range" min="0" max="2" step="0.01" value="0.25" />
+        <div class="row"><label>Hull smoothing</label><div class="value"><span id="smoothVal">0.25</span></div></div>
+        <input id="smooth" type="range" min="0" max="1" step="0.01" value="0.25" />
         <div class="btns">
           <button id="reseed">Reseed</button>
           <button id="regularize">Regularize</button>
@@ -77,12 +79,14 @@
         <input id="foldStr" type="range" min="0" max="1.6" step="0.01" value="1.00" />
         <div class="row"><label>Softness</label><div class="value"><span id="foldSoftVal">0.16</span></div></div>
         <input id="foldSoft" type="range" min="0.05" max="0.6" step="0.01" value="0.16" />
+        <div class="row"><label>Fold speed</label><div class="value"><span id="foldSpdVal">1.00</span></div></div>
+        <input id="foldSpd" type="range" min="0" max="4" step="0.01" value="1.00" />
         <div class="row"><label>Plane count</label><div class="value"><span id="planeCountVal">7</span></div></div>
         <input id="planeCount" type="range" min="3" max="9" step="1" value="7" />
       </div>
 
       <div class="group">
-        <h2>Material / Texture</h2>
+        <h2>Material / Bold Patterns</h2>
         <div class="row"><label>Preset</label>
           <div class="value">
             <select id="texPreset">
@@ -93,24 +97,33 @@
             </select>
           </div>
         </div>
-        <div class="row"><label>Pattern mix</label><div class="value"><span id="patMixVal">0.55</span></div></div>
-        <input id="patMix" type="range" min="0" max="1" step="0.01" value="0.55" />
-        <div class="row"><label>Noise scale</label><div class="value"><span id="noiseScaleVal">2.0</span></div></div>
-        <input id="noiseScale" type="range" min="0.5" max="6" step="0.01" value="2.0" />
-        <div class="row"><label>Band freq</label><div class="value"><span id="bandFreqVal">12.0</span></div></div>
-        <input id="bandFreq" type="range" min="2" max="28" step="0.1" value="12.0" />
-        <div class="row"><label>Band speed</label><div class="value"><span id="bandSpeedVal">1.10</span></div></div>
-        <input id="bandSpeed" type="range" min="0" max="4" step="0.01" value="1.10" />
-        <div class="row"><label>Film thickness (nm)</label><div class="value"><span id="thickVal">430</span></div></div>
-        <input id="thick" type="range" min="250" max="650" step="1" value="430" />
-        <div class="row"><label>Film IOR</label><div class="value"><span id="iorVal">1.38</span></div></div>
-        <input id="ior" type="range" min="1.25" max="1.55" step="0.001" value="1.38" />
+        <div class="row"><label>Pattern type</label>
+          <div class="value">
+            <select id="pattern">
+              <option value="0">Bands</option>
+              <option value="1">CrossGrid</option>
+              <option value="2">Spiral</option>
+              <option value="3">Kaleido</option>
+              <option value="4">Cells</option>
+            </select>
+          </div>
+        </div>
+        <div class="row"><label>Pattern scale</label><div class="value"><span id="patScaleVal">12.0</span></div></div>
+        <input id="patScale" type="range" min="2" max="40" step="0.1" value="12.0" />
+        <div class="row"><label>Warp strength</label><div class="value"><span id="warpVal">0.80</span></div></div>
+        <input id="warp" type="range" min="0" max="2" step="0.01" value="0.80" />
+        <div class="row"><label>Warp speed</label><div class="value"><span id="warpSpdVal">1.00</span></div></div>
+        <input id="warpSpd" type="range" min="0" max="4" step="0.01" value="1.00" />
+        <div class="row"><label>Contrast</label><div class="value"><span id="contrastVal">1.40</span></div></div>
+        <input id="contrast" type="range" min="0.5" max="3" step="0.01" value="1.40" />
+        <div class="row"><label>Reflection mix</label><div class="value"><span id="reflVal">0.30</span></div></div>
+        <input id="refl" type="range" min="0" max="1" step="0.01" value="0.30" />
         <div class="row"><label>Texture strength</label><div class="value"><span id="texStrVal">0.85</span></div></div>
         <input id="texStr" type="range" min="0" max="1" step="0.01" value="0.85" />
         <div class="row"><label>Desaturate</label><div class="value"><span id="desatVal">0.70</span></div></div>
         <input id="desat" type="range" min="0" max="1" step="0.01" value="0.70" />
-        <div class="row"><label>Glint</label><div class="value"><span id="glintVal">0.40</span></div></div>
-        <input id="glint" type="range" min="0" max="1" step="0.01" value="0.40" />
+        <div class="row"><label>Glint</label><div class="value"><span id="glintVal">0.45</span></div></div>
+        <input id="glint" type="range" min="0" max="1" step="0.01" value="0.45" />
       </div>
 
       <div class="group">
@@ -138,7 +151,7 @@
       </div>
     </aside>
 
-    <div class="hint">Drag to orbit • Presets tuned for dark, low‑sat iridescence • Wireframe/Shaded/Textured</div>
+    <div class="hint">Drag to orbit • Bold patterns via Pattern type + Warp/Contrast • Fold speed slider</div>
 
     <!-- ES-module shims + import map -->
     <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.min.js"></script>
