@@ -1,5 +1,5 @@
-// Convex hull + cohesive folding + bold patterns & distortions (no mouse coupling).
-// IDs in this file exactly match index.html to avoid null element issues.
+// Convex hull + cohesive folding + hologram film tuned to the contact sheet.
+// WebGL2-safe (no #extension directives). Full controls on the right.
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -12,7 +12,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 
-const { clamp, lerp } = THREE.MathUtils;
+const { clamp } = THREE.MathUtils;
 
 // ------------------------------------- Renderer / Scene / Camera
 const container = document.getElementById('app');
@@ -21,7 +21,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.15;
 renderer.debug.checkShaderErrors = true;
 container.appendChild(renderer.domElement);
 
@@ -39,41 +39,44 @@ const state = {
   // view
   viewMode: 'textured',
   edgesOverlay: false,
+
   // hull
-  ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12, smooth: 0.25,
+  ptCount: 16, spike: 0.28, animatePts: true, ptSpeed: 0.22, edgeOpacity: 0.10, smooth: 0.35,
+
   // fold
-  foldStr: 1.0, foldSoft: 0.16, foldSpeed: 1.0, planeCount: 7,
-  // material / texture
-  texPreset: 'refA',
-  pattern: 0,                 // 0 Bands, 1 CrossGrid, 2 Spiral, 3 Kaleido, 4 Cells
-  patScale: 12.0, warp: 0.80, warpSpd: 1.0, contrast: 1.40, refl: 0.30,
-  patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9,
-  thick: 420, ior: 1.37,
-  texStr: 0.85, desat: 0.75, glint: 0.45,
+  foldStr: 1.10, foldSoft: 0.12, foldSpeed: 1.80, planeCount: 6,
+
+  // material / pattern tuned to sheet
+  pattern: 1,                // CrossGrid
+  patScale: 13.0, warp: 0.35, warpSpd: 0.80, contrast: 1.70, refl: 0.40,
+  patMix: 0.45, noiseScale: 1.8, bandFreq: 17.0, bandSpeed: 1.0,
+  thick: 410, ior: 1.37,
+  texStr: 0.85, desat: 0.65, glint: 0.42,
+
   // fx
   after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18,
+
   // motion
   autoSpin: true, spinSpeed: 0.002
 };
+
 function setVal(id, v, d = 2){ const el = document.getElementById(id); if (el) el.textContent = (typeof v === 'number') ? v.toFixed(d) : String(v); }
 function syncUI(){
-  // View
   $('viewMode').value = state.viewMode;
   $('edgesOverlay').checked = state.edgesOverlay;
-  // Structure
+
   $('ptCount').value = state.ptCount; setVal('ptCountVal', state.ptCount, 0);
   $('spike').value = state.spike; setVal('spikeVal', state.spike, 2);
   $('animatePts').checked = state.animatePts;
   $('ptSpeed').value = state.ptSpeed; setVal('ptSpeedVal', state.ptSpeed, 2);
   $('edgeOpacity').value = state.edgeOpacity; setVal('edgeOpacityVal', state.edgeOpacity, 2);
   $('smooth').value = state.smooth; setVal('smoothVal', state.smooth, 2);
-  // Fold
+
   $('foldStr').value = state.foldStr; setVal('foldStrVal', state.foldStr);
   $('foldSoft').value = state.foldSoft; setVal('foldSoftVal', state.foldSoft, 2);
   $('foldSpd').value = state.foldSpeed; setVal('foldSpdVal', state.foldSpeed, 2);
   $('planeCount').value = state.planeCount; setVal('planeCountVal', state.planeCount, 0);
-  // Patterns
-  $('texPreset').value = state.texPreset;
+
   $('pattern').value = String(state.pattern);
   $('patScale').value = state.patScale; setVal('patScaleVal', state.patScale, 1);
   $('warp').value = state.warp; setVal('warpVal', state.warp, 2);
@@ -83,14 +86,14 @@ function syncUI(){
   $('texStr').value = state.texStr; setVal('texStrVal', state.texStr, 2);
   $('desat').value = state.desat; setVal('desatVal', state.desat, 2);
   $('glint').value = state.glint; setVal('glintVal', state.glint, 2);
-  // Advanced (micro / film)
+
   $('patMix').value = state.patMix; setVal('patMixVal', state.patMix, 2);
   $('noiseScale').value = state.noiseScale; setVal('noiseScaleVal', state.noiseScale, 2);
   $('bandFreq').value = state.bandFreq; setVal('bandFreqVal', state.bandFreq, 1);
   $('bandSpeed').value = state.bandSpeed; setVal('bandSpeedVal', state.bandSpeed, 2);
   $('thick').value = state.thick; setVal('thickVal', state.thick, 0);
   $('ior').value = state.ior; setVal('iorVal', state.ior, 3);
-  // FX
+
   $('after').value = state.after; setVal('afterVal', state.after, 4);
   $('rgb').value = state.rgb; setVal('rgbVal', state.rgb, 4);
   $('bloomStr').value = state.bloomStr; setVal('bloomStrVal', state.bloomStr, 2);
@@ -101,9 +104,9 @@ syncUI();
 
 // ------------------------------------- Dynamic Convex Hull (smoother)
 const MAX_POINTS = 40;
-const seeds     = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
-const targets   = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
-const base      = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
+const seeds   = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
+const targets = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
+const base    = Array.from({ length: MAX_POINTS }, () => new THREE.Vector3());
 
 function reseed(mode = 'random') {
   const R = 1.0;
@@ -134,13 +137,14 @@ function updateTargets(t) {
     const off = i * 0.37;
     const b = base[i];
     const radial = 1.0 + amp * Math.sin(t * (0.7 + 0.23 * Math.sin(off)) + off * 1.618);
-    const y = 0.3 * Math.sin(t * speed + off);
+    const y = 0.28 * Math.sin(t * speed + off);
     targets[i].set(b.x * radial, b.y + y, b.z * radial);
   }
 }
 function integrateSeeds(alpha) {
   const n = Math.max(4, Math.min(state.ptCount, MAX_POINTS));
-  for (let i = 0; i < n; i++) seeds[i].lerp(targets[i], clamp(alpha, 0, 1));
+  const a = clamp(alpha, 0, 1);
+  for (let i = 0; i < n; i++) seeds[i].lerp(targets[i], a);
 }
 function gatherHullPoints() {
   const n = Math.max(4, Math.min(state.ptCount, MAX_POINTS));
@@ -190,28 +194,34 @@ function buildPlanes(count = 7) {
 function loadPlanes(count) {
   const arr = buildPlanes(count);
   uniforms.uPlaneCount.value = count | 0;
-  for (let i = 0; i < MAX_PLANES; i++) uniforms.uPlanes.value[i].copy(arr[i % arr.length]);
+  for (let i = 0; i < MAX_PLANES; i++) {
+    uniforms.uPlanes.value[i].copy(arr[i % arr.length]);
+  }
 }
 
-// ------------------------------------- Shader (flat facets + bold patterns)
+// ------------------------------------- Shader (flat facets + hologram film)
 const uniforms = {
   uTime:           { value: 0 },
+
   // view
-  uTexEnabled:     { value: 1.0 },    // 0=shaded, 1=textured
+  uTexEnabled:     { value: 1.0 },   // 0=shaded, 1=textured
+
   // folding
   uFoldStrength:   { value: state.foldStr },
   uFoldSoft:       { value: state.foldSoft },
   uFoldSpeed:      { value: state.foldSpeed },
   uPlaneCount:     { value: state.planeCount },
   uPlanes:         { value: Array.from({ length: MAX_PLANES }, () => new THREE.Vector3()) },
-  // material patterns & bold controls
+
+  // pattern controls
   uPatternType:    { value: state.pattern | 0 },
   uPatternScale:   { value: state.patScale },
   uWarp:           { value: state.warp },
   uWarpSpeed:      { value: state.warpSpd },
   uContrast:       { value: state.contrast },
   uReflMix:        { value: state.refl },
-  // micro / film parameters
+
+  // film + micro-structure
   uPatMix:         { value: state.patMix },
   uNoiseScale:     { value: state.noiseScale },
   uStripeFreq:     { value: state.bandFreq },
@@ -221,7 +231,11 @@ const uniforms = {
   uTexStr:         { value: state.texStr },
   uDesat:          { value: state.desat },
   uGlint:          { value: state.glint },
-  uBaseColor:      { value: new THREE.Color(0x070809) }
+
+  // base tone + edge tint for magenta rim from the sheet
+  uBaseColor:      { value: new THREE.Color(0x070809) },
+  uEdgeTint:       { value: new THREE.Color(1.0, 0.55, 0.95) }, // magenta-ish
+  uEdgePower:      { value: 2.5 } // how quickly rim builds
 };
 
 const vertexShader = `
@@ -248,7 +262,8 @@ mat3 rotY(float a){ float c=cos(a), s=sin(a); return mat3(c,0.,s, 0.,1.,0., -s,0
 
 void main(){
   vec3 p = position, nrm = normal;
-  float a = uTime * 0.20; // slow rigid spin; fold speed is separate
+
+  float a = uTime * 0.18; // slow global spin so folding motion dominates
   mat3 R = rotY(a);
   p = R*p; nrm = R*nrm;
 
@@ -258,7 +273,7 @@ void main(){
       if(i >= uPlaneCount) break;
       vec3 n = normalize(uPlanes[i]);
       float phase = float(i)*1.618 + float(iter)*0.73;
-      float d = 0.20 * sin(uTime * uFoldSpeed + phase);
+      float d = 0.22 * sin(uTime * uFoldSpeed + phase);
       blendedFold(p, nrm, n, d, uFoldStrength, uFoldSoft, crease);
     }
   }
@@ -272,7 +287,7 @@ void main(){
 }
 `;
 
-// No #extension directives; derivatives are core in WebGL2/ESSL3.
+// WebGL2: derivatives are core; no #extension directive.
 const fragmentShader = `
 precision highp float;
 
@@ -280,12 +295,13 @@ uniform float uTime, uTexEnabled;
 uniform int   uPatternType;
 uniform float uPatternScale, uWarp, uWarpSpeed, uContrast, uReflMix;
 uniform float uPatMix, uNoiseScale, uStripeFreq, uStripeMove, uThicknessBase, uIorFilm;
-uniform float uTexStr, uDesat, uGlint;
-uniform vec3  uBaseColor;
+uniform float uTexStr, uDesat, uGlint, uEdgePower;
+uniform vec3  uBaseColor, uEdgeTint;
 
 varying vec3 vNormal, vPosView, vPosWorld;
 varying float vCrease;
 
+// --- utility
 float hash11(float n){ return fract(sin(n)*43758.5453123); }
 float noise3(vec3 x){
   vec3 i=floor(x), f=fract(x);
@@ -328,54 +344,55 @@ vec3 thinFilm(float thickness, float n1, float n2, float n3, float cosTheta1){
 }
 
 vec3 envColor(vec3 R){
+  // stylized studio-like env (stripes + rim) to get "weird reflections"
   float v = clamp(R.y*0.5+0.5, 0.0, 1.0);
-  float hStripes = 0.5 + 0.5 * sin((R.x+R.z)*24.0 + uTime*0.6);
-  float rings = 0.5 + 0.5 * sin(acos(clamp(R.y, -1., 1.)) * 12.0 - uTime*0.5);
-  vec3 sky = mix(vec3(0.03,0.04,0.05), vec3(0.12,0.15,0.18), v);
-  return sky + 0.25*hStripes*vec3(0.8,0.9,1.0) + 0.2*rings*vec3(1.0,0.85,0.6);
+  float hStripes = 0.5 + 0.5 * sin((R.x+R.z)*26.0 + uTime*0.5);
+  float rim = pow(max(0.0,1.0-abs(R.y)), 2.5);
+  vec3 cool = mix(vec3(0.03,0.04,0.05), vec3(0.12,0.16,0.19), v);
+  return cool + 0.25*hStripes*vec3(0.8,0.95,1.0) + 0.32*rim*vec3(1.0,0.75,0.9);
 }
 
+// bold pattern projected per-facet for crisp straight lines
 float patternValue(vec3 pos, vec3 N){
   vec3 T = ortho(N);
   vec3 B = normalize(cross(N, T));
   vec2 uv = vec2(dot(pos, T), dot(pos, B)) * uPatternScale;
 
-  vec3 pw = pos;
+  // domain warp (adds the "breathing" wobble)
   vec3 q = pos * (0.35 + 0.15*uPatternScale*0.05);
   vec3 warp = vec3(
     fbm(q*0.8 + vec3(0.0,  uTime*uWarpSpeed, 10.0)),
     fbm(q*0.8 + vec3(10.0, uTime*uWarpSpeed, 0.0)),
     fbm(q*0.8 + vec3(20.0, uTime*uWarpSpeed, 5.0))
   );
-  pw += (warp - 0.5) * uWarp;
   uv += (warp.xz - 0.5*vec2(1.0)) * (uWarp*0.75) * uPatternScale;
 
   float t = uTime;
 
-  if (uPatternType == 0) {
+  if (uPatternType == 0) {          // Bands
     float s = sin(uv.x + 0.6*sin(uv.y*0.5 + t*0.7));
     return 0.5 + 0.5*s;
-  } else if (uPatternType == 1) {
-    float gx = 0.5 + 0.5*sin(uv.x + t*0.9);
+  } else if (uPatternType == 1) {   // CrossGrid (default)
+    float gx = 0.5 + 0.5*sin(uv.x*1.0 + t*0.9);
     float gy = 0.5 + 0.5*sin(uv.y*1.03 - t*0.8);
     return pow(gx*gy, 0.8);
-  } else if (uPatternType == 2) {
+  } else if (uPatternType == 2) {   // Spiral
     float r = length(uv)*0.25;
     float a = atan(uv.y, uv.x);
     return 0.5 + 0.5*sin(10.0*a + 6.0*r - t*1.2);
-  } else if (uPatternType == 3) {
+  } else if (uPatternType == 3) {   // Kaleido
     float a = atan(uv.y, uv.x);
     float k = 3.141592653589793/3.0;
     a = mod(a, k);
     float r = length(uv)*0.22;
     return 0.5 + 0.5*sin(12.0*a + 10.0*r - t*1.0);
-  } else {
-    float c = cells2(uv*0.15);
-    return c;
+  } else {                          // Cells
+    return cells2(uv*0.15);
   }
 }
 
 void main(){
+  // flat facet normal via derivatives
   vec3 Ng = normalize(cross(dFdx(vPosWorld), dFdy(vPosWorld)));
   if(dot(Ng, vNormal) < 0.0) Ng = -Ng;
   vec3 N = Ng;
@@ -383,10 +400,11 @@ void main(){
   vec3 V = normalize(-vPosView);
   float NdotV = clamp(dot(N,V), 0.0, 1.0);
 
+  // base shading (dark)
   vec3 L = normalize(vec3(0.35,0.9,0.15));
   float diff = max(dot(N,L), 0.0);
   float rim  = pow(1.0 - NdotV, 2.0);
-  vec3 baseCol = uBaseColor * (0.25 + 0.75*diff) + uBaseColor * rim * 0.12;
+  vec3 baseCol = uBaseColor * (0.25 + 0.75*diff) + uBaseColor * rim * 0.10;
 
   if (uTexEnabled < 0.5) {
     vec3 color = baseCol + vCrease * 0.12;
@@ -394,36 +412,44 @@ void main(){
     return;
   }
 
+  // facet pattern (hologram lines)
   float pat = patternValue(vPosWorld, N);
 
-  vec3 d1 = normalize(vec3(0.7, 0.0, 0.3));
-  float coord = dot(vPosWorld, d1) * uStripeFreq + uTime * uStripeMove;
-  float grating = tri((coord) * 0.5);
+  // micro structure (subpixel grating / noise) blended in
+  float coord = dot(vPosWorld, normalize(vec3(0.7,0.0,0.3))) * uStripeFreq + uTime * uStripeMove;
+  float grating = tri(coord * 0.5);
   float n = fbm(vPosWorld * uNoiseScale + vec3(0.0, uTime*0.12, 0.0));
   float micro = mix(grating, n, uPatMix);
   pat = clamp(mix(pat, (pat*0.7 + micro*0.3), 0.25), 0.0, 1.0);
 
+  // contrast (sharper like the sheet)
   pat = clamp(0.5 + (pat - 0.5) * uContrast, 0.0, 1.0);
 
+  // thin film + reflections
   float thickness = uThicknessBase * (0.70 + 0.30 * pat) * (0.92 + 0.08 * vCrease);
   vec3 film = thinFilm(thickness, 1.0, uIorFilm, 1.0, NdotV);
-
   vec3 R = reflect(-V, N);
   vec3 env = envColor(R);
 
+  // fresnel + anisotropic glints
   float f0 = 0.05 + 0.02 * pat;
   float fresnel = f0 + (1.0 - f0) * pow(1.0 - NdotV, 5.0);
   vec3 A1 = normalize(vec3(0.2, 1.0, 0.0));
   vec3 A2 = normalize(vec3(-0.7, 0.3, 0.6));
   float aniso = pow(abs(dot(R,A1)), 24.0) + 0.5 * pow(abs(dot(R,A2)), 36.0);
 
-  vec3 color = baseCol;
+  // combine (bias toward green/magenta like the grid)
   vec3 irid = film * (0.6 + 0.7*pat);
+  vec3 color = baseCol;
   color = mix(color, irid, uTexStr);
-  color += fresnel * (mix(env, irid, 0.5)) * (0.25 + 0.5*uReflMix);
+  color += fresnel * mix(env, irid, 0.55) * (0.25 + 0.5*uReflMix);
   color += aniso * irid * (0.6 * uGlint);
   color += vCrease * irid * 0.25;
 
+  // magenta rim tint to push that contact-sheet edge hue
+  color += pow(1.0 - NdotV, uEdgePower) * 0.35 * uEdgeTint;
+
+  // desaturate to keep it tasteful/dark
   float Y = luma(color);
   color = mix(color, vec3(Y), clamp(uDesat, 0.0, 1.0));
 
@@ -451,13 +477,13 @@ rgbShiftPass.uniforms['angle'].value  = Math.PI / 4;
 composer.addPass(rgbShiftPass);
 composer.addPass(new OutputPass());
 
-// ------------------------------------- View & presets
+// ------------------------------------- View
 function applyViewMode(){
   if (!mesh || !edgeLines) return;
   material.wireframe = false;
   mesh.visible = true;
 
-  // edges overlay only if requested (and never in pure wireframe)
+  // overlay edges only when requested, never in pure wireframe
   edgeLines.visible = state.edgesOverlay && state.viewMode !== 'wireframe';
   edgeLines.material.opacity = state.edgeOpacity;
 
@@ -491,30 +517,10 @@ function applyMaterialState(){
   uniforms.uStripeMove.value   = state.bandSpeed;
   uniforms.uThicknessBase.value = state.thick;
   uniforms.uIorFilm.value      = state.ior;
+
   uniforms.uTexStr.value       = state.texStr;
   uniforms.uDesat.value        = state.desat;
   uniforms.uGlint.value        = state.glint;
-}
-
-function applyPreset(name){
-  state.texPreset = name;
-  if (name === 'refA'){           // dark iridescent
-    Object.assign(state, {
-      patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9,
-      thick: 420, ior: 1.37, texStr: 0.85, desat: 0.75, glint: 0.45
-    });
-  } else if (name === 'refB'){    // ghost grid
-    Object.assign(state, {
-      patMix: 0.35, noiseScale: 1.3, bandFreq: 18.0, bandSpeed: 1.2,
-      thick: 400, ior: 1.36, texStr: 0.80, desat: 0.70, glint: 0.35
-    });
-  } else if (name === 'refC'){    // marble bands
-    Object.assign(state, {
-      patMix: 0.80, noiseScale: 3.2, bandFreq: 7.0, bandSpeed: 0.6,
-      thick: 520, ior: 1.40, texStr: 0.75, desat: 0.60, glint: 0.30
-    });
-  }
-  syncUI(); applyMaterialState();
 }
 
 // ------------------------------------- initial setup
@@ -524,7 +530,7 @@ updateTargets(0);
 integrateSeeds(1.0);
 rebuildHull();
 
-// ------------------------------------- UI events (all IDs exist in index.html)
+// ------------------------------------- UI events
 $('viewMode').addEventListener('change', () => { state.viewMode = $('viewMode').value; applyViewMode(); });
 $('edgesOverlay').addEventListener('change', () => { state.edgesOverlay = $('edgesOverlay').checked; applyViewMode(); });
 $('edgeOpacity').addEventListener('input', () => {
@@ -546,7 +552,6 @@ $('foldSoft').addEventListener('input', () => { state.foldSoft = parseFloat($('f
 $('foldSpd').addEventListener('input', () => { state.foldSpeed = parseFloat($('foldSpd').value); setVal('foldSpdVal', state.foldSpeed, 2); uniforms.uFoldSpeed.value = state.foldSpeed; });
 $('planeCount').addEventListener('input', () => { state.planeCount = parseInt($('planeCount').value, 10); setVal('planeCountVal', state.planeCount, 0); loadPlanes(state.planeCount); });
 
-$('texPreset').addEventListener('change', () => { applyPreset($('texPreset').value); });
 $('pattern').addEventListener('change', () => { state.pattern = parseInt($('pattern').value,10); applyMaterialState(); });
 $('patScale').addEventListener('input', () => { state.patScale = parseFloat($('patScale').value); setVal('patScaleVal', state.patScale, 1); applyMaterialState(); });
 $('warp').addEventListener('input', () => { state.warp = parseFloat($('warp').value); setVal('warpVal', state.warp, 2); applyMaterialState(); });
@@ -560,6 +565,7 @@ $('bandFreq').addEventListener('input', () => { state.bandFreq = parseFloat($('b
 $('bandSpeed').addEventListener('input', () => { state.bandSpeed = parseFloat($('bandSpeed').value); setVal('bandSpeedVal', state.bandSpeed, 2); applyMaterialState(); });
 $('thick').addEventListener('input', () => { state.thick = parseFloat($('thick').value); setVal('thickVal', state.thick, 0); applyMaterialState(); });
 $('ior').addEventListener('input', () => { state.ior = parseFloat($('ior').value); setVal('iorVal', state.ior, 3); applyMaterialState(); });
+
 $('texStr').addEventListener('input', () => { state.texStr = parseFloat($('texStr').value); setVal('texStrVal', state.texStr, 2); applyMaterialState(); });
 $('desat').addEventListener('input', () => { state.desat = parseFloat($('desat').value); setVal('desatVal', state.desat, 2); applyMaterialState(); });
 $('glint').addEventListener('input', () => { state.glint = parseFloat($('glint').value); setVal('glintVal', state.glint, 2); applyMaterialState(); });
@@ -573,12 +579,11 @@ $('bloomThr').addEventListener('input', () => { state.bloomThr = parseFloat($('b
 $('reset').addEventListener('click', () => {
   Object.assign(state, {
     viewMode: 'textured', edgesOverlay: false,
-    ptCount: 18, spike: 0.45, animatePts: true, ptSpeed: 0.25, edgeOpacity: 0.12, smooth: 0.25,
-    foldStr: 1.0, foldSoft: 0.16, foldSpeed: 1.0, planeCount: 7,
-    texPreset: 'refA',
-    pattern: 0, patScale: 12.0, warp: 0.80, warpSpd: 1.0, contrast: 1.40, refl: 0.30,
-    patMix: 0.65, noiseScale: 2.2, bandFreq: 10.0, bandSpeed: 0.9,
-    thick: 420, ior: 1.37, texStr: 0.85, desat: 0.75, glint: 0.45,
+    ptCount: 16, spike: 0.28, animatePts: true, ptSpeed: 0.22, edgeOpacity: 0.10, smooth: 0.35,
+    foldStr: 1.10, foldSoft: 0.12, foldSpeed: 1.80, planeCount: 6,
+    pattern: 1, patScale: 13.0, warp: 0.35, warpSpd: 0.80, contrast: 1.70, refl: 0.40,
+    patMix: 0.45, noiseScale: 1.8, bandFreq: 17.0, bandSpeed: 1.0,
+    thick: 410, ior: 1.37, texStr: 0.85, desat: 0.65, glint: 0.42,
     after: 0.96, rgb: 0.0010, bloomStr: 0.90, bloomRad: 0.45, bloomThr: 0.18,
     autoSpin: true, spinSpeed: 0.002
   });
@@ -587,7 +592,7 @@ $('reset').addEventListener('click', () => {
 
 $('toggleBloom').addEventListener('click', () => { bloomPass.enabled = !bloomPass.enabled; });
 
-// ------------------------------------- Resize & Animate (60 Hz hull rebuild for stability)
+// ------------------------------------- Resize & Animate
 function onResize(){
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -605,10 +610,10 @@ function animate(){
   afterPass.uniforms['damp'].value = Math.pow(state.after, dt * 60.0);
 
   updateTargets(uniforms.uTime.value);
-  integrateSeeds(state.smooth); // smoothing reduces jitter
+  integrateSeeds(state.smooth);
 
   rebuildAccumulator += dt;
-  if (rebuildAccumulator > 0.016) { // ~60 Hz
+  if (rebuildAccumulator > 0.016) { // ~60 Hz for stable motion
     rebuildHull();
     rebuildAccumulator = 0;
   }
