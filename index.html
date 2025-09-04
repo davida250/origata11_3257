@@ -4,51 +4,33 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Prism Fold — Convex Hull, Cohesive Fold</title>
-    <meta name="description" content="Dynamic convex hull (straight edges), cohesive folding, thin-film iridescence, subtle ghosting. Three.js + custom shaders." />
     <style>
-      :root {
-        --panel-w: 360px;
-        --bg: #000;
-        --fg: #e8e8e8;
-        --muted: #a0a0a0;
-        --accent: #59ffa7;
-      }
-      html, body {
-        height: 100%;
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-        font: 14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-        overflow: hidden;
-      }
-      #app { position: fixed; inset: 0; }
+      :root { --panel-w: 380px; --bg:#000; --fg:#e8e8e8; --muted:#a0a0a0; --accent:#59ffa7; }
+      html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);
+        font:14px/1.35 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
+      #app{position:fixed;inset:0}
 
-      /* Right-side controls */
-      .panel {
-        position: fixed; top: 0; right: 0; width: var(--panel-w); height: 100%;
-        box-sizing: border-box; padding: 14px;
-        background: radial-gradient(1200px 400px at 10% -10%, rgba(90,255,167,.05), transparent 60%), rgba(8,8,8,.72);
-        backdrop-filter: blur(6px); border-left: 1px solid rgba(255,255,255,.08);
-        overflow: auto; user-select: none; -webkit-font-smoothing: antialiased;
-      }
-      .panel h1 { margin: 6px 0 10px; font-size: 16px; font-weight: 600; letter-spacing: .2px; }
-      .panel small { color: var(--muted); }
-      .group { margin: 10px 0 14px; padding: 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.02); }
-      .group h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .4px; text-transform: uppercase; }
-      .row { display: grid; grid-template-columns: 1fr 150px; grid-gap: 10px; align-items: center; margin: 8px 0; }
-      .row label { display: block; font-size: 13px; }
-      .row .value { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-      .row-2col { display: grid; grid-template-columns: 1fr 1fr; grid-gap: 10px; }
-      input[type="range"] { width: 100%; margin: 0; -webkit-appearance: none; background: transparent; }
-      input[type="range"]::-webkit-slider-runnable-track { height: 6px; background: linear-gradient(90deg, rgba(255,255,255,.2), rgba(255,255,255,.08)); border-radius: 999px; }
-      input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -4px; background: var(--fg); border-radius: 50%; border: 0; box-shadow: 0 0 0 2px #000 inset; }
-      input[type="checkbox"] { transform: translateY(2px); accent-color: var(--accent); }
-      select { width: 100%; padding: 6px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.15); color: var(--fg); border-radius: 6px; }
-      .btns { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-      button { padding: 8px 10px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.06); color: var(--fg); font-weight: 600; border-radius: 6px; cursor: pointer; }
-      button:hover { background: rgba(255,255,255,.12); }
-      .hint { position: fixed; left: 12px; bottom: 12px; color: var(--muted); background: rgba(0,0,0,.35); padding: 6px 8px; border-radius: 6px; }
-      @media (max-width: 900px) { .panel { width: 86vw; } }
+      .panel{position:fixed;top:0;right:0;width:var(--panel-w);height:100%;box-sizing:border-box;padding:14px;
+        background:radial-gradient(1200px 400px at 10% -10%,rgba(90,255,167,.05),transparent 60%),rgba(8,8,8,.72);
+        backdrop-filter:blur(6px);border-left:1px solid rgba(255,255,255,.08);overflow:auto;user-select:none}
+      .panel h1{margin:6px 0 10px;font-size:16px;font-weight:600;letter-spacing:.2px}
+      .panel small{color:var(--muted)}
+      .group{margin:10px 0 14px;padding:10px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.02)}
+      .group h2{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.4px;text-transform:uppercase}
+      .row{display:grid;grid-template-columns:1fr 160px;grid-gap:10px;align-items:center;margin:8px 0}
+      .row label{display:block;font-size:13px}
+      .row .value{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+      .row-2col{display:grid;grid-template-columns:1fr 1fr;grid-gap:10px}
+      select{width:100%;padding:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);color:var(--fg);border-radius:6px}
+      input[type="range"]{width:100%;margin:0;-webkit-appearance:none;background:transparent}
+      input[type="range"]::-webkit-slider-runnable-track{height:6px;background:linear-gradient(90deg,rgba(255,255,255,.2),rgba(255,255,255,.08));border-radius:999px}
+      input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4px;background:var(--fg);border-radius:50%;border:0;box-shadow:0 0 0 2px #000 inset}
+      input[type="checkbox"]{transform:translateY(2px);accent-color:var(--accent)}
+      .btns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+      button{padding:8px 10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:var(--fg);font-weight:600;border-radius:6px;cursor:pointer}
+      button:hover{background:rgba(255,255,255,.12)}
+      .hint{position:fixed;left:12px;bottom:12px;color:var(--muted);background:rgba(0,0,0,.35);padding:6px 8px;border-radius:6px}
+      @media (max-width:900px){.panel{width:86vw}}
     </style>
   </head>
   <body>
@@ -69,6 +51,9 @@
             </select>
           </div>
         </div>
+        <div class="row"><label>Edges overlay</label><div class="value"><input id="edgesOverlay" type="checkbox" /></div></div>
+        <div class="row"><label>Edge opacity</label><div class="value"><span id="edgeOpacityVal">0.12</span></div></div>
+        <input id="edgeOpacity" type="range" min="0" max="0.9" step="0.01" value="0.12" />
       </div>
 
       <div class="group">
@@ -80,8 +65,6 @@
         <div class="row"><label>Animate points</label><div class="value"><input id="animatePts" type="checkbox" checked /></div></div>
         <div class="row"><label>Point speed</label><div class="value"><span id="ptSpeedVal">0.25</span></div></div>
         <input id="ptSpeed" type="range" min="0" max="2" step="0.01" value="0.25" />
-        <div class="row"><label>Edge opacity</label><div class="value"><span id="edgeOpacityVal">0.12</span></div></div>
-        <input id="edgeOpacity" type="range" min="0" max="0.9" step="0.01" value="0.12" />
         <div class="btns">
           <button id="reseed">Reseed</button>
           <button id="regularize">Regularize</button>
@@ -99,19 +82,35 @@
       </div>
 
       <div class="group">
-        <h2>Material</h2>
+        <h2>Material / Texture</h2>
+        <div class="row"><label>Preset</label>
+          <div class="value">
+            <select id="texPreset">
+              <option value="custom" selected>Custom</option>
+              <option value="refA">Ref A — dark iridescent</option>
+              <option value="refB">Ref B — ghost grid</option>
+              <option value="refC">Ref C — marble bands</option>
+            </select>
+          </div>
+        </div>
         <div class="row"><label>Pattern mix</label><div class="value"><span id="patMixVal">0.55</span></div></div>
         <input id="patMix" type="range" min="0" max="1" step="0.01" value="0.55" />
         <div class="row"><label>Noise scale</label><div class="value"><span id="noiseScaleVal">2.0</span></div></div>
         <input id="noiseScale" type="range" min="0.5" max="6" step="0.01" value="2.0" />
-        <div class="row"><label>Film thickness (nm)</label><div class="value"><span id="thickVal">430</span></div></div>
-        <input id="thick" type="range" min="250" max="650" step="1" value="430" />
-        <div class="row"><label>Film IOR</label><div class="value"><span id="iorVal">1.38</span></div></div>
-        <input id="ior" type="range" min="1.25" max="1.55" step="0.001" value="1.38" />
         <div class="row"><label>Band freq</label><div class="value"><span id="bandFreqVal">12.0</span></div></div>
         <input id="bandFreq" type="range" min="2" max="28" step="0.1" value="12.0" />
         <div class="row"><label>Band speed</label><div class="value"><span id="bandSpeedVal">1.10</span></div></div>
         <input id="bandSpeed" type="range" min="0" max="4" step="0.01" value="1.10" />
+        <div class="row"><label>Film thickness (nm)</label><div class="value"><span id="thickVal">430</span></div></div>
+        <input id="thick" type="range" min="250" max="650" step="1" value="430" />
+        <div class="row"><label>Film IOR</label><div class="value"><span id="iorVal">1.38</span></div></div>
+        <input id="ior" type="range" min="1.25" max="1.55" step="0.001" value="1.38" />
+        <div class="row"><label>Texture strength</label><div class="value"><span id="texStrVal">0.85</span></div></div>
+        <input id="texStr" type="range" min="0" max="1" step="0.01" value="0.85" />
+        <div class="row"><label>Desaturate</label><div class="value"><span id="desatVal">0.70</span></div></div>
+        <input id="desat" type="range" min="0" max="1" step="0.01" value="0.70" />
+        <div class="row"><label>Glint</label><div class="value"><span id="glintVal">0.40</span></div></div>
+        <input id="glint" type="range" min="0" max="1" step="0.01" value="0.40" />
       </div>
 
       <div class="group">
@@ -139,9 +138,9 @@
       </div>
     </aside>
 
-    <div class="hint">Drag to orbit • View: Wireframe / Shaded / Textured • Facets are flat‑shaded</div>
+    <div class="hint">Drag to orbit • Presets tuned for dark, low‑sat iridescence • Wireframe/Shaded/Textured</div>
 
-    <!-- Import map + polyfill so 'three' & add-ons resolve in the browser -->
+    <!-- ES-module shims + import map -->
     <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.min.js"></script>
     <script type="importmap">
       {
